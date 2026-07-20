@@ -1,19 +1,19 @@
 ---
 name: trader-dale-chart-analysis
-description: "Reads a trading chart screenshot (any instrument, any timeframe) and produces a structured technical analysis by applying Trader Dale's Price Action, Volume Profile, and Order Flow frameworks together. Use when the user gives a pair/instrument name and timeframe with a chart image and asks for analysis, trade setup identification, or a decision walkthrough. Depends on the trader-dale-price-action and trader-dale-order-flow skills being installed as sibling skills."
+description: "Reads a trading chart screenshot (any instrument, any timeframe) and produces a structured technical analysis by applying Trader Dale's Price Action, Volume Profile, Order Flow, and VWAP frameworks together. Use when the user gives a pair/instrument name and timeframe with a chart image and asks for analysis, trade setup identification, or a decision walkthrough. For long-term/stock-investing framing (fundamentals + Volume Profile timing, not intraday) see the investing note in Step 1. Depends on the trader-dale-price-action, trader-dale-order-flow, trader-dale-vwap, and trader-dale-investing skills being installed as sibling skills."
 ---
 
 <!-- argument-hint: <instrument> <timeframe> + attach one or more chart screenshots -->
 
 # Trader Dale Chart Analysis
 
-Applies the frameworks already extracted into the `trader-dale-price-action` and
-`trader-dale-order-flow` skills to an actual chart the user shows you — turning
-"here's a screenshot" into a structured read using the author's own decision rules,
-not generic TA.
+Applies the frameworks already extracted into the `trader-dale-price-action`,
+`trader-dale-order-flow`, `trader-dale-vwap`, and `trader-dale-investing` skills
+to an actual chart the user shows you — turning "here's a screenshot" into a
+structured read using the author's own decision rules, not generic TA.
 
-This skill is an orchestrator, not a third knowledge base: it does not duplicate
-content. It tells you which files to pull from the two sibling skills, in what
+This skill is an orchestrator, not a fifth knowledge base: it does not duplicate
+content. It tells you which files to pull from the sibling skills, in what
 order, and how to assemble the result.
 
 ## Required inputs
@@ -32,24 +32,39 @@ Look at the image(s) directly. Determine which of these it is:
 - **Plain candlestick / price chart** → Price Action + Volume Profile frameworks apply.
 - **Volume Profile chart** (horizontal histogram on the price axis, POC/Value Area visible) → Volume Profile frameworks apply.
 - **Footprint / order-flow chart** (per-candle bid×ask ladder, delta, imbalances visible) → Order Flow frameworks also apply.
+- **VWAP or Anchored VWAP line visible** on the chart → VWAP frameworks also apply (see Step 2's `trader-dale-vwap` pull).
 
 Note what's *not* visible too (e.g. no footprint data, no higher-timeframe context) —
 this determines what you can and cannot assess later.
 
+**Long-term/investing framing**: if the user is asking about a *stock* on a Daily/Weekly
+chart with a multi-month-or-longer horizon (not an intraday/swing trade), or mentions
+fundamentals, screening, or "should I invest/hold" rather than "should I enter a trade
+now" — pull from `trader-dale-investing` instead of (or alongside) the intraday setups
+below. That skill's Volume Profile Setup Selection table and Screening Thresholds table
+in its cheatsheet are the relevant rules; its Core Filter requires fundamentals *and*
+Volume Profile confirmation together, not price structure alone. Don't apply intraday
+Order Flow or VWAP-Rotation logic to a long-term-investing question — wrong timeframe
+for those tools.
+
 ## Step 2 — Pull the relevant decision rules
 
 Locate the sibling skills relative to this skill's own directory (same
-`SKILLS_HOME`, i.e. `../trader-dale-price-action/` and `../trader-dale-order-flow/`).
+`SKILLS_HOME`, i.e. `../trader-dale-price-action/`, `../trader-dale-order-flow/`,
+`../trader-dale-vwap/`, and `../trader-dale-investing/`).
 
 Always read first:
 - `../trader-dale-price-action/cheatsheet.md` — decision rules, thresholds, tells & smells
 - `../trader-dale-price-action/SKILL.md` — core frameworks + topic index (only if you need to locate a specific chapter)
 
-Read on demand, only for what the chart actually shows:
+Read on demand, only for what the chart actually shows or the user actually asked:
 - `../trader-dale-order-flow/cheatsheet.md` — only if a footprint/DOM chart was provided
-- Specific chapter files under either skill's `chapters/` folder when you recognize a
+- `../trader-dale-vwap/cheatsheet.md` — only if a VWAP/Anchored VWAP line is visible, or the user asks about VWAP specifically. Covers which anchor to use, the Regime Read (Rotation vs Trend from deviation-band slope), the Entry Confirmation Ladder, and the Confluence Checklist (VWAP + Volume Profile + Price Action agreeing raises conviction — this is the same checklist implemented programmatically in the `trader-dale-live-analysis` GitHub Pages tool, see docs/index.html).
+- `../trader-dale-investing/cheatsheet.md` — only for the long-term/stock-investing framing described in Step 1.
+- Specific chapter files under any sibling skill's `chapters/` folder when you recognize a
   specific pattern and need the full detail (e.g. `../trader-dale-price-action/chapters/ch11-failed-auction.md`,
-  `../trader-dale-order-flow/chapters/ch09-confirmations-big-limit-orders-absorption.md`)
+  `../trader-dale-order-flow/chapters/ch09-confirmations-big-limit-orders-absorption.md`,
+  `../trader-dale-vwap/chapters/ch12-confluences-with-other-strategies.md`)
 
 Don't load chapters you don't need — that defeats the point of the on-demand design.
 
@@ -61,6 +76,7 @@ Walk through, using only what's visible in the image:
 - **Price Action institutional-activity tells**: sideways compression area, aggressive initiation move, strong rejection of higher/lower prices.
 - **Named strategy match**: does the setup resemble support/resistance flip, open-drive, AB=CD, session open, daily open, daily/weekly high-low, or a failed auction? Check strong vs. weak highs/lows too.
 - **Order Flow confirmations** (only if a footprint/DOM chart was given): passive vs. active participants, stacked imbalances, absorption at a level, cumulative delta divergence, unfinished business (poor high/poor low).
+- **VWAP read** (only if visible): which anchor is plotted (session/weekly/yearly/swing-point/trend-start/news/gap/earnings), where price sits relative to VWAP and its 1st deviation band, and whether the band slope reads as Rotation (fade toward VWAP) or Trend (ride the band). Check for confluence with a Volume Profile level or a Price Action flip level per the Confluence Checklist.
 
 ## Step 4 — Report
 
@@ -83,8 +99,12 @@ Use this template:
 "Not assessed — no footprint/order-flow chart was supplied. Real-time delta and
 order-book absorption can't be read from a static price chart.">
 
+## VWAP read
+<anchor type, price vs. VWAP/1st deviation, Rotation vs. Trend regime, confluence with
+Volume Profile/Price Action if any — or "No VWAP line visible in this screenshot.">
+
 ## Matching setup(s)
-- **<Strategy name>** (see `trader-dale-price-action` ch<N>) — <why it matches, the book's entry criteria>
+- **<Strategy name>** (see `trader-dale-price-action` ch<N>, or `trader-dale-vwap`/`trader-dale-investing` as relevant) — <why it matches, the book's entry criteria>
 
 ## Suggested levels (per the book's rules — not a guarantee)
 - Entry zone: <...>

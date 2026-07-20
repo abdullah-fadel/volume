@@ -59,7 +59,7 @@
 <body>
 <div class="wrap">
   <h1>📊 Trader Dale Live Analysis</h1>
-  <div class="sub">تحليل فني حي مبني على أطر Trader Dale (Price Action + Volume Profile) — يجيب بيانات حقيقية من Twelve Data مباشرة من متصفحك.</div>
+  <div class="sub">تحليل فني حي مبني على أطر Trader Dale (Price Action + Volume Profile + VWAP) — يجيب بيانات حقيقية من Twelve Data مباشرة من متصفحك.</div>
 
   <div class="card">
     <div class="row">
@@ -126,8 +126,8 @@
   <div class="card report" id="report" style="display:none"></div>
 
   <footer>
-    مبني على السكلات <code>trader-dale-price-action</code> و<code>trader-dale-order-flow</code> —
-    الحساب Volume Profile / Price Action يصير بالكامل بمتصفحك، ما فيه أي جزء يشتغل على سيرفر.
+    مبني على السكلات <code>trader-dale-price-action</code> و<code>trader-dale-order-flow</code> و<code>trader-dale-vwap</code> و<code>trader-dale-investing</code> —
+    كل حساب Volume Profile / Price Action / VWAP يصير بالكامل بمتصفحك، ما فيه أي جزء يشتغل على سيرفر.
   </footer>
 </div>
 
@@ -144,6 +144,9 @@ const RULES = {
     Thin: "Thin profile: ترند سريع وقوي، فوليوم قليل موزع، أي تجمع صغير فيه يشتغل كدعم (بترند صاعد) أو مقاومة (بترند هابط)."
   },
   intradayPTSL: "افتراضي intraday: 10 pip PT / 12 pip SL (أو تحجيم عبر ATR). Swing: SL خلف حافة منطقة الفوليوم، 0.5-4x ATR اليومي.",
+  vwapRotation: "VWAP Rotation Strategy: لما الانحرافات (deviations) أفقية (نظام تجميع/rotation)، السعر عند الانحراف الأول يميل يرجع لخط VWAP — فيد (fade) الانحراف، الهدف VWAP نفسه.",
+  vwapTrend: "VWAP Trend Strategy: لما الانحرافات مايلة بقوة (نظام ترند)، اتبع الباند المتجه بدل ما تفيده، وحرّك الوقف مع الترند.",
+  confluenceText: "Confluence Checklist: القناعة تزيد لما يتفق 2+ من: VWAP (أي أنكور) + VWAP ثاني بأنكور مختلف + انقلاب دعم/مقاومة Price Action + Volume Profile Trend Setup.",
   disclaimer: "⚠️ تحليل تعليمي فقط، مبني على أطر Trader Dale المطبّقة على بيانات حقيقية مجلوبة من Twelve Data — ليس نصيحة استثمارية، وليس توصية تداول، وليس بديلاً عن إدارة المخاطر الخاصة بك. التداول ينطوي على مخاطر خسارة كبيرة، والبيانات المجانية قد تكون متأخرة أو تقريبية (خصوصًا الفوركس/الذهب اللي بيانات حجمه tick-based مو حجم تداول حقيقي)."
 };
 
@@ -309,12 +312,35 @@ function analyze(candles, meta){
   const lateAvg = candles.slice(-thirdLen).reduce((s,c)=>s+c.c,0) / thirdLen;
   const trendDir = lateAvg >= earlyAvg ? "up" : "down";
 
+  // --- Anchored VWAP (anchored to the start of the fetched window) + 1st deviation band ---
+  // Same real-vs-proxy volume caveat as the Volume Profile above applies here.
+  const vwapSeries = [], vwapUpper = [], vwapLower = [];
+  let cumPV = 0, cumW = 0, cumVarNum = 0;
+  candles.forEach(c => {
+    const typical = (c.h + c.l + c.c) / 3;
+    const w = hasRealVolume ? (c.v || 0) : ((c.h - c.l) || 1e-9);
+    cumPV += typical * w;
+    cumW += w;
+    const v = cumW > 0 ? cumPV / cumW : typical;
+    vwapSeries.push(v);
+    const diff = typical - v;
+    cumVarNum += w * diff * diff;
+    const sd = cumW > 0 ? Math.sqrt(cumVarNum / cumW) : 0;
+    vwapUpper.push(v + sd);
+    vwapLower.push(v - sd);
+  });
+  const vwapLast = vwapSeries[vwapSeries.length - 1];
+  const vwapUpperLast = vwapUpper[vwapUpper.length - 1];
+  const vwapLowerLast = vwapLower[vwapLower.length - 1];
+  const vwapRegime = (last.c > vwapUpperLast || last.c < vwapLowerLast) ? "trend" : "rotation";
+
   return { lo, hi, bins, poc, pocIdx, valueAreaLow, valueAreaHigh, shape, volumeQuality, trendDir,
-           swings: recentSwings, flipCandidates: flipCandidates.slice(0,4), last, totalVol };
+           swings: recentSwings, flipCandidates: flipCandidates.slice(0,4), last, totalVol,
+           vwapSeries, vwapUpper, vwapLower, vwapLast, vwapUpperLast, vwapLowerLast, vwapRegime };
 }
 
 /* ---------- Trade decision: buy / sell / wait + entry, stop, targets ---------- */
-function decide(a){
+function decideVP(a){
   const range = a.hi - a.lo || 1e-9;
   const buffer = range * 0.01;
   const tol = range * 0.05;
@@ -396,7 +422,55 @@ function decide(a){
     if (risk > 0) rrr = reward / risk;
   }
 
-  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr };
+  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr, source: "vp" };
+}
+
+/* ---------- VWAP Rotation signal (fade the 1st deviation band back to VWAP) ---------- */
+function decideVWAP(a){
+  if (a.vwapRegime !== "rotation") return null; // book: only fade in a rotation regime, ride in a trend regime
+  const range = a.hi - a.lo || 1e-9;
+  const buffer = range * 0.01;
+  const price = a.last.c;
+  const nearUpper = price >= a.vwapUpperLast - buffer;
+  const nearLower = price <= a.vwapLowerLast + buffer;
+
+  if (nearUpper && !nearLower){
+    const entryLow = Math.min(price, a.vwapUpperLast) - buffer*0.4;
+    const entryHigh = Math.max(price, a.vwapUpperLast) + buffer*0.4;
+    const stop = entryHigh + buffer;
+    const t1 = a.vwapLast;
+    const entryMid = (entryLow + entryHigh) / 2;
+    const rrr = Math.abs(entryMid - stop) > 0 ? Math.abs(t1 - entryMid) / Math.abs(entryMid - stop) : null;
+    return { signal:"sell", entryLow, entryHigh, stop, t1, t2:null, rrr, source:"vwap",
+      why: "VWAP Rotation: السعر عند الانحراف الأول العلوي، النظام أفقي (rotation) — يُتوقع رجوع لخط VWAP." };
+  }
+  if (nearLower && !nearUpper){
+    const entryHigh = Math.max(price, a.vwapLowerLast) + buffer*0.4;
+    const entryLow = Math.min(price, a.vwapLowerLast) - buffer*0.4;
+    const stop = entryLow - buffer;
+    const t1 = a.vwapLast;
+    const entryMid = (entryLow + entryHigh) / 2;
+    const rrr = Math.abs(entryMid - stop) > 0 ? Math.abs(t1 - entryMid) / Math.abs(entryMid - stop) : null;
+    return { signal:"buy", entryLow, entryHigh, stop, t1, t2:null, rrr, source:"vwap",
+      why: "VWAP Rotation: السعر عند الانحراف الأول السفلي، النظام أفقي (rotation) — يُتوقع رجوع لخط VWAP." };
+  }
+  return null;
+}
+
+/* ---------- Combine Volume Profile read + VWAP Rotation read (per the book's Confluence Checklist) ---------- */
+function decide(a){
+  const vp = decideVP(a);
+  const vw = decideVWAP(a);
+
+  if (vw && vp.signal !== "wait"){
+    if (vw.signal === vp.signal){
+      return { ...vp, why: "✅ تأكيد إضافي من VWAP Rotation (نفس الاتجاه) — " + vp.why, confluence: true };
+    }
+    return { signal:"wait", entryLow:null, entryHigh:null, stop:null, t1:null, t2:null, rrr:null,
+      why: `تعارض: Volume Profile يرجّح ${vp.signal === "buy" ? "شراء" : "بيع"} لكن VWAP Rotation يرجّح ${vw.signal === "buy" ? "شراء" : "بيع"} — لا دخول حتى يتفقوا.` };
+  }
+  if (vw) return vw;
+  return vp;
 }
 
 /* ---------- Report rendering ---------- */
@@ -407,9 +481,10 @@ function render(symbol, interval, meta, a, candles){
   const d = decide(a);
 
   const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : "⏸ انتظار — لا يوجد إعداد واضح الآن";
+  const sourceLabel = d.source === "vwap" ? "VWAP Rotation" : d.source === "vp" ? "Volume Profile" : "";
   const verdictHtml = `
 <div class="verdict ${d.signal}">
-  <div class="verdict-badge">${verdictLabel}</div>
+  <div class="verdict-badge">${verdictLabel}${sourceLabel ? ` <span class="pill">${sourceLabel}${d.confluence ? " + VWAP" : ""}</span>` : ""}</div>
   <div class="verdict-grid">
     <div><span>منطقة الدخول</span><b>${d.entryLow!=null ? fmt(d.entryLow)+" – "+fmt(d.entryHigh) : "—"}</b></div>
     <div><span>وقف الخسارة (خروج)</span><b>${d.stop!=null ? fmt(d.stop) : "—"}</b></div>
@@ -417,6 +492,7 @@ function render(symbol, interval, meta, a, candles){
     <div><span>الهدف الثاني</span><b>${d.t2!=null ? fmt(d.t2) : "—"}</b></div>
   </div>
   <div class="verdict-why">${d.why}${d.rrr ? ` — نسبة مخاطرة/عائد تقريبية 1:${d.rrr.toFixed(1)}` : ""}</div>
+  <div class="verdict-why">VWAP: ${fmt(a.vwapLast)} (${fmt(a.vwapLowerLast)} – ${fmt(a.vwapUpperLast)}) — النظام: ${a.vwapRegime === "rotation" ? "تجميع/rotation" : "ترند"}</div>
 </div>
 <div class="mini-disclaimer">⚠️ تعليمي فقط، حساب آلي تقريبي مبني على بيانات Twelve Data — مو نصيحة استثمارية، والقرار والمخاطرة عليك.</div>`;
 
@@ -455,6 +531,14 @@ ${a.volumeQuality === "range_proxy" ? '<div class="warn">⚠️ ما فيه بي
 ${RULES.shapeDefs[a.shape]}<br><br>
 POC (أثقل منطقة): <b>${fmt(a.poc)}</b><br>
 Value Area: ${fmt(a.valueAreaLow)} – ${fmt(a.valueAreaHigh)}
+
+<h2>VWAP read</h2>
+VWAP (من بداية النافذة المجلوبة): <b>${fmt(a.vwapLast)}</b><br>
+الانحراف الأول (1st deviation): ${fmt(a.vwapLowerLast)} – ${fmt(a.vwapUpperLast)}<br>
+النظام: <b>${a.vwapRegime === "rotation" ? "أفقي (Rotation)" : "ترند (Trend)"}</b><br><br>
+${RULES.vwapRotation}<br>
+${RULES.vwapTrend}<br><br>
+<i>${RULES.confluenceText}</i>
 
 <h2>Price Action signals</h2>
 ${lastStrong.length ? `نقاط قوية أخيرة (strong): ${lastStrong.map(s=>`${s.type==="high"?"قمة":"قاع"} ${fmt(s.price)}`).join("، ")}` : "ما فيه نقاط قوية واضحة بآخر الشموع."}<br>
@@ -527,6 +611,24 @@ function drawChart(candles, a){
   ctx.strokeStyle = "#e0a72e";
   ctx.setLineDash([4,3]);
   ctx.beginPath(); ctx.moveTo(chartX0, priceToY(a.poc)); ctx.lineTo(chartX1, priceToY(a.poc)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // VWAP line + 1st deviation band
+  const drawLine = (series, color, width) => {
+    ctx.strokeStyle = color; ctx.lineWidth = width;
+    ctx.beginPath();
+    series.forEach((v, i) => {
+      const x = chartX0 + i * cw + cw/2;
+      const y = priceToY(v);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  };
+  drawLine(a.vwapSeries, "#c084fc", 1.5);
+  ctx.setLineDash([2,3]);
+  drawLine(a.vwapUpper, "#c084fc88", 1);
+  drawLine(a.vwapLower, "#c084fc88", 1);
   ctx.setLineDash([]);
 
   // volume profile bars
