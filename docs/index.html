@@ -35,6 +35,22 @@
   .report h2{font-size:1.05rem;border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:22px}
   .report h1{font-size:1.15rem;margin-top:0}
   .disclaimer{margin-top:18px;padding:12px;border:1px dashed #6a5a1e;border-radius:8px;color:var(--warn);font-size:.82rem}
+  .verdict{border-radius:12px;padding:18px;margin-bottom:14px;border:1px solid var(--border)}
+  .verdict.buy{background:linear-gradient(180deg,#0f2620,#131722);border-color:#1f5c4c}
+  .verdict.sell{background:linear-gradient(180deg,#2a1416,#131722);border-color:#5c2328}
+  .verdict.wait{background:var(--panel)}
+  .verdict-badge{font-size:1.5rem;font-weight:700;margin-bottom:12px}
+  .verdict.buy .verdict-badge{color:var(--green)}
+  .verdict.sell .verdict-badge{color:var(--red)}
+  .verdict.wait .verdict-badge{color:var(--muted);font-size:1.1rem}
+  .verdict-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+  .verdict-grid > div{background:#0000002e;border-radius:8px;padding:8px 10px}
+  .verdict-grid span{display:block;font-size:.75rem;color:var(--muted)}
+  .verdict-grid b{font-size:1.05rem}
+  .verdict-why{margin-top:12px;font-size:.85rem;color:var(--muted)}
+  .mini-disclaimer{font-size:.78rem;color:var(--warn);margin-bottom:16px}
+  details{margin-top:4px}
+  summary{cursor:pointer;color:var(--accent);font-size:.9rem;padding:6px 0}
   footer{color:var(--muted);font-size:.78rem;text-align:center;margin-top:30px}
   a{color:var(--accent)}
   .pill{display:inline-block;background:#1a2030;border:1px solid var(--border);border-radius:999px;padding:2px 10px;font-size:.75rem;color:var(--muted);margin-inline-start:6px}
@@ -76,8 +92,10 @@
         <label>عدد الشموع</label>
         <select id="outputsize">
           <option value="90">90</option>
-          <option value="180" selected>180</option>
+          <option value="180">180</option>
           <option value="300">300</option>
+          <option value="500">500</option>
+          <option value="1000" selected>1000</option>
         </select>
       </div>
     </div>
@@ -286,8 +304,99 @@ function analyze(candles, meta){
 
   const last = candles[candles.length - 1];
 
-  return { lo, hi, bins, poc, pocIdx, valueAreaLow, valueAreaHigh, shape, volumeQuality,
+  const thirdLen = Math.max(5, Math.floor(candles.length / 3));
+  const earlyAvg = candles.slice(0, thirdLen).reduce((s,c)=>s+c.c,0) / thirdLen;
+  const lateAvg = candles.slice(-thirdLen).reduce((s,c)=>s+c.c,0) / thirdLen;
+  const trendDir = lateAvg >= earlyAvg ? "up" : "down";
+
+  return { lo, hi, bins, poc, pocIdx, valueAreaLow, valueAreaHigh, shape, volumeQuality, trendDir,
            swings: recentSwings, flipCandidates: flipCandidates.slice(0,4), last, totalVol };
+}
+
+/* ---------- Trade decision: buy / sell / wait + entry, stop, targets ---------- */
+function decide(a){
+  const range = a.hi - a.lo || 1e-9;
+  const buffer = range * 0.01;
+  const tol = range * 0.05;
+  const price = a.last.c;
+  const strongHighs = a.swings.filter(s=>s.type==="high" && s.strength==="strong").map(s=>s.price);
+  const strongLows  = a.swings.filter(s=>s.type==="low"  && s.strength==="strong").map(s=>s.price);
+  const nearTop = price >= a.valueAreaHigh - tol || strongHighs.some(h=>Math.abs(price-h)<=tol);
+  const nearBottom = price <= a.valueAreaLow + tol || strongLows.some(l=>Math.abs(price-l)<=tol);
+  const nearPOC = Math.abs(price - a.poc) <= tol;
+
+  let signal = "wait", entryLow=null, entryHigh=null, stop=null, t1=null, t2=null, why="";
+
+  // Stop is always derived from the entry zone itself (never from an independently-scaled
+  // level) so it's structurally guaranteed to sit beyond the zone, never inside it.
+  function setBuyZone(level, t1v, t2v){
+    entryHigh = Math.max(level, price) + tol*0.4;
+    entryLow  = Math.min(level, price) - tol*0.4;
+    stop = entryLow - buffer;
+    t1 = Math.max(t1v, entryHigh + buffer);
+    t2 = Math.max(t2v, t1 + buffer);
+  }
+  function setSellZone(level, t1v, t2v){
+    entryLow  = Math.min(level, price) - tol*0.4;
+    entryHigh = Math.max(level, price) + tol*0.4;
+    stop = entryHigh + buffer;
+    t1 = Math.min(t1v, entryLow - buffer);
+    t2 = Math.min(t2v, t1 - buffer);
+  }
+
+  if (a.shape === "D"){
+    if (nearTop && !nearBottom){
+      signal = "sell";
+      const level = strongHighs.length ? Math.max(...strongHighs) : a.valueAreaHigh;
+      setSellZone(level, a.poc, a.valueAreaLow);
+      why = "السعر عند قمة D-profile — منطقة رفض بيع محتملة، Core Filter يحتاج تأكيد رفض واضح على الشارت الحقيقي قبل الدخول.";
+    } else if (nearBottom && !nearTop){
+      signal = "buy";
+      const level = strongLows.length ? Math.min(...strongLows) : a.valueAreaLow;
+      setBuyZone(level, a.poc, a.valueAreaHigh);
+      why = "السعر عند قاع D-profile — منطقة رفض شراء محتملة، Core Filter يحتاج تأكيد رفض واضح على الشارت الحقيقي قبل الدخول.";
+    } else {
+      why = "السعر بمنتصف D-profile، مو عند قمة ولا قاع — لا يوجد إعداد دخول واضح الآن حسب الكتاب.";
+    }
+  } else if (a.shape === "P"){
+    if (nearPOC){
+      signal = "buy";
+      setBuyZone(a.poc, a.valueAreaHigh, a.hi);
+      why = "P-profile: POC يُتوقع يشتغل دعم لاستمرار صاعد بعد pullback.";
+    } else {
+      why = "P-profile (بائعين ضعفاء) لكن السعر بعيد عن POC — انتظر السعر يرجع لمنطقة POC قبل أي دخول.";
+    }
+  } else if (a.shape === "b"){
+    if (nearPOC){
+      signal = "sell";
+      setSellZone(a.poc, a.valueAreaLow, a.lo);
+      why = "b-profile: POC يُتوقع يشتغل مقاومة لاستمرار هابط بعد pullback.";
+    } else {
+      why = "b-profile (مشترين ضعفاء) لكن السعر بعيد عن POC — انتظر السعر يرجع لمنطقة POC قبل أي دخول.";
+    }
+  } else { // Thin
+    if (nearPOC && a.trendDir === "up"){
+      signal = "buy";
+      setBuyZone(a.poc, a.hi, a.hi + range*0.5);
+      why = "Thin profile بترند صاعد: التجمع الوحيد الظاهر بالبروفايل يشتغل دعم استمرار.";
+    } else if (nearPOC && a.trendDir === "down"){
+      signal = "sell";
+      setSellZone(a.poc, a.lo, a.lo - range*0.5);
+      why = "Thin profile بترند هابط: التجمع الوحيد الظاهر بالبروفايل يشتغل مقاومة استمرار.";
+    } else {
+      why = "Thin profile لكن السعر بعيد عن التجمع الوحيد الظاهر — انتظر السعر يرجع له.";
+    }
+  }
+
+  let rrr = null;
+  if (signal !== "wait"){
+    const entryMid = (entryLow + entryHigh) / 2;
+    const risk = Math.abs(entryMid - stop);
+    const reward = Math.abs(t1 - entryMid);
+    if (risk > 0) rrr = reward / risk;
+  }
+
+  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr };
 }
 
 /* ---------- Report rendering ---------- */
@@ -295,6 +404,21 @@ function render(symbol, interval, meta, a, candles){
   const fmt = (n) => n.toFixed(n < 10 ? 5 : n < 1000 ? 3 : 2);
   const lastStrong = a.swings.filter(s=>s.strength==="strong").slice(-2);
   const lastWeak = a.swings.filter(s=>s.strength==="weak").slice(-2);
+  const d = decide(a);
+
+  const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : "⏸ انتظار — لا يوجد إعداد واضح الآن";
+  const verdictHtml = `
+<div class="verdict ${d.signal}">
+  <div class="verdict-badge">${verdictLabel}</div>
+  <div class="verdict-grid">
+    <div><span>منطقة الدخول</span><b>${d.entryLow!=null ? fmt(d.entryLow)+" – "+fmt(d.entryHigh) : "—"}</b></div>
+    <div><span>وقف الخسارة (خروج)</span><b>${d.stop!=null ? fmt(d.stop) : "—"}</b></div>
+    <div><span>الهدف الأول</span><b>${d.t1!=null ? fmt(d.t1) : "—"}</b></div>
+    <div><span>الهدف الثاني</span><b>${d.t2!=null ? fmt(d.t2) : "—"}</b></div>
+  </div>
+  <div class="verdict-why">${d.why}${d.rrr ? ` — نسبة مخاطرة/عائد تقريبية 1:${d.rrr.toFixed(1)}` : ""}</div>
+</div>
+<div class="mini-disclaimer">⚠️ تعليمي فقط، حساب آلي تقريبي مبني على بيانات Twelve Data — مو نصيحة استثمارية، والقرار والمخاطرة عليك.</div>`;
 
   let setupText = "لا يوجد تطابق واضح لإعداد Setup محدد — البنية غير كافية للحكم.";
   const nearPOC = Math.abs(a.last.c - a.poc) <= (a.hi - a.lo) * 0.03;
@@ -315,6 +439,10 @@ function render(symbol, interval, meta, a, candles){
     : "ما لقيت مستوى واضح بلمستين أو أكثر بهذا النطاق من الشموع.";
 
   const html = `
+${verdictHtml}
+<details>
+<summary>📋 تفاصيل التحليل الكامل (اضغط لعرضها)</summary>
+
 <h1>Technical Read — ${escapeHtml(symbol)} (${interval})</h1>
 
 <h2>ما هو ظاهر بالبيانات</h2>
@@ -351,6 +479,7 @@ ${RULES.intradayPTSL}
 - ما فيه Order Flow ولا سياق أخبار/macro بهذا التحليل.
 
 <div class="disclaimer">${RULES.disclaimer}</div>
+</details>
 `;
   el("report").innerHTML = html;
   el("report").style.display = "block";
