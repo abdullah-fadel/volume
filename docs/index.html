@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trader Dale Live Analysis</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#131722; --border:#232734; --text:#e7e9ee; --muted:#8b93a7;
+    --green:#26a69a; --red:#ef5350; --accent:#4f8cff; --gold:#e0a72e; --warn:#f2c14e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Tahoma,Arial,sans-serif;line-height:1.6}
+  .wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+  h1{font-size:1.4rem;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:.9rem;margin-bottom:20px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:.85rem;color:var(--muted);margin-bottom:4px}
+  .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+  input,select{width:100%;background:#0f1320;border:1px solid var(--border);color:var(--text);
+    padding:10px;border-radius:8px;font-size:.95rem}
+  input:focus,select:focus{outline:1px solid var(--accent)}
+  .checkline{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted);margin-top:10px}
+  .checkline input{width:auto}
+  button{background:var(--accent);color:#fff;border:none;padding:11px 22px;border-radius:8px;
+    font-size:.95rem;cursor:pointer;margin-top:14px}
+  button:disabled{opacity:.5;cursor:default}
+  button:hover:not(:disabled){filter:brightness(1.1)}
+  .note{font-size:.78rem;color:var(--muted);margin-top:10px}
+  .warn{background:#2a2110;border:1px solid #4a3a12;color:var(--warn);border-radius:8px;padding:10px 12px;font-size:.82rem;margin-top:10px}
+  #status{font-size:.85rem;color:var(--muted);margin-top:10px;min-height:1.2em}
+  #err{background:#2a1414;border:1px solid #5a2323;color:#ff9a9a;border-radius:8px;padding:12px;display:none;white-space:pre-wrap;font-size:.85rem}
+  canvas{width:100%;height:auto;background:#0f1320;border-radius:8px;border:1px solid var(--border)}
+  .report{white-space:pre-wrap;font-size:.92rem}
+  .report h2{font-size:1.05rem;border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:22px}
+  .report h1{font-size:1.15rem;margin-top:0}
+  .disclaimer{margin-top:18px;padding:12px;border:1px dashed #6a5a1e;border-radius:8px;color:var(--warn);font-size:.82rem}
+  footer{color:var(--muted);font-size:.78rem;text-align:center;margin-top:30px}
+  a{color:var(--accent)}
+  .pill{display:inline-block;background:#1a2030;border:1px solid var(--border);border-radius:999px;padding:2px 10px;font-size:.75rem;color:var(--muted);margin-inline-start:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📊 Trader Dale Live Analysis</h1>
+  <div class="sub">تحليل فني حي مبني على أطر Trader Dale (Price Action + Volume Profile) — يجيب بيانات حقيقية من Twelve Data مباشرة من متصفحك.</div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>الأداة (Symbol)</label>
+        <select id="symbolPreset">
+          <option value="XAU/USD">الذهب — XAU/USD</option>
+          <option value="EUR/USD">EUR/USD</option>
+          <option value="EUR/CAD">EUR/CAD</option>
+          <option value="GBP/USD">GBP/USD</option>
+          <option value="USD/JPY">USD/JPY</option>
+          <option value="BTC/USD">BTC/USD</option>
+          <option value="__custom__">أداة أخرى (اكتبها تحت)</option>
+        </select>
+        <input id="symbolCustom" placeholder="مثال: GOOGL أو AAPL أو XAU/USD" style="margin-top:8px;display:none">
+      </div>
+      <div>
+        <label>الفريم (Interval)</label>
+        <select id="interval">
+          <option value="5min">5 دقايق</option>
+          <option value="15min">15 دقيقة</option>
+          <option value="30min" selected>30 دقيقة</option>
+          <option value="1h">ساعة</option>
+          <option value="4h">4 ساعات</option>
+          <option value="1day">يومي</option>
+          <option value="1week">أسبوعي</option>
+        </select>
+      </div>
+      <div>
+        <label>عدد الشموع</label>
+        <select id="outputsize">
+          <option value="90">90</option>
+          <option value="180" selected>180</option>
+          <option value="300">300</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <label>مفتاح Twelve Data API (مجاني — من <a href="https://twelvedata.com/account/api-keys" target="_blank" rel="noopener">twelvedata.com</a>)</label>
+      <input id="apiKey" type="password" placeholder="الصق مفتاحك هنا">
+      <div class="checkline">
+        <input type="checkbox" id="rememberKey">
+        <label for="rememberKey" style="margin:0">احفظ المفتاح بهذا المتصفح فقط (localStorage)</label>
+      </div>
+      <div class="warn">
+        ⚠️ هذا الموقع صفحة ثابتة على GitHub Pages بدون أي سيرفر خلفي. مفتاحك يُرسل <b>مباشرة من متصفحك</b> إلى Twelve Data فقط،
+        وما يمر بأي كود أو مستودع تابع لينا، وما يُخزّن إلا محليًا بجهازك إذا فعّلت الخيار فوق. لا تحط مفتاح حساب مدفوع أو حساس هنا —
+        استخدم المفتاح المجاني نفسه المخصص للتجربة.
+      </div>
+    </div>
+
+    <button id="go">تحليل</button>
+    <div id="status"></div>
+    <div id="err"></div>
+  </div>
+
+  <div class="card" id="chartCard" style="display:none">
+    <canvas id="chart" width="900" height="420"></canvas>
+  </div>
+
+  <div class="card report" id="report" style="display:none"></div>
+
+  <footer>
+    مبني على السكلات <code>trader-dale-price-action</code> و<code>trader-dale-order-flow</code> —
+    الحساب Volume Profile / Price Action يصير بالكامل بمتصفحك، ما فيه أي جزء يشتغل على سيرفر.
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- Book rules, inlined from the generated skills' cheatsheets ---------- */
+const RULES = {
+  coreFilterText: "Core Filter (الكتاب): كل دخول يحتاج (1) إشارة Price Action (تجميع جانبي / بدء عدواني / رفض قوي) و(2) واحد من 3 إعدادات Volume (تجميع / ترند / رفض) سوا. ما تدخل بمؤشر وحده.",
+  shapeDefs: {
+    D: "D-profile: بروفايل متوازن، POC قريب من النص، عدوانية عند القمة (بيع) والقاع (شراء). شورت عند تجمعات قرب القمة، لونق عند تجمعات قرب القاع، POC هدف جيد.",
+    P: "P-profile: مشترين عدوانيين وبائعين ضعفاء (تجميع عند القمة بعد شموع صاعدة). POC = دعم عند pullback بعد صعود إضافي.",
+    b: "b-profile: بائعين عدوانيين ومشترين ضعفاء (تجميع عند القاع بعد شموع هابطة). POC = مقاومة عند pullback بعد هبوط إضافي.",
+    Thin: "Thin profile: ترند سريع وقوي، فوليوم قليل موزع، أي تجمع صغير فيه يشتغل كدعم (بترند صاعد) أو مقاومة (بترند هابط)."
+  },
+  intradayPTSL: "افتراضي intraday: 10 pip PT / 12 pip SL (أو تحجيم عبر ATR). Swing: SL خلف حافة منطقة الفوليوم، 0.5-4x ATR اليومي.",
+  disclaimer: "⚠️ تحليل تعليمي فقط، مبني على أطر Trader Dale المطبّقة على بيانات حقيقية مجلوبة من Twelve Data — ليس نصيحة استثمارية، وليس توصية تداول، وليس بديلاً عن إدارة المخاطر الخاصة بك. التداول ينطوي على مخاطر خسارة كبيرة، والبيانات المجانية قد تكون متأخرة أو تقريبية (خصوصًا الفوركس/الذهب اللي بيانات حجمه tick-based مو حجم تداول حقيقي)."
+};
+
+/* ---------- DOM wiring ---------- */
+const el = (id) => document.getElementById(id);
+el("symbolPreset").addEventListener("change", () => {
+  el("symbolCustom").style.display = el("symbolPreset").value === "__custom__" ? "block" : "none";
+});
+const savedKey = localStorage.getItem("td_api_key");
+if (savedKey) { el("apiKey").value = savedKey; el("rememberKey").checked = true; }
+
+el("go").addEventListener("click", runAnalysis);
+
+async function runAnalysis(){
+  const btn = el("go");
+  const statusEl = el("status");
+  const errEl = el("err");
+  errEl.style.display = "none";
+  el("report").style.display = "none";
+  el("chartCard").style.display = "none";
+
+  const symbol = el("symbolPreset").value === "__custom__"
+    ? el("symbolCustom").value.trim()
+    : el("symbolPreset").value;
+  const interval = el("interval").value;
+  const outputsize = el("outputsize").value;
+  const apiKey = el("apiKey").value.trim();
+
+  if (!symbol){ showErr("لازم تكتب اسم الأداة."); return; }
+  if (!apiKey){ showErr("لازم تحط مفتاح Twelve Data API."); return; }
+
+  if (el("rememberKey").checked) localStorage.setItem("td_api_key", apiKey);
+  else localStorage.removeItem("td_api_key");
+
+  btn.disabled = true;
+  statusEl.textContent = "⏳ يجيب البيانات من Twelve Data...";
+
+  try {
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=${outputsize}&apikey=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.status === "error" || data.code){
+      throw new Error(data.message || "خطأ من Twelve Data — تأكد من اسم الأداة والفريم والمفتاح.");
+    }
+    if (!data.values || !data.values.length){
+      throw new Error("ما رجعت بيانات — جرّب اسم أداة أو فريم مختلف.");
+    }
+
+    statusEl.textContent = "🧮 يحسب Volume Profile وبنية السعر...";
+    const candles = data.values
+      .map(v => ({
+        t: v.datetime,
+        o: parseFloat(v.open), h: parseFloat(v.high), l: parseFloat(v.low), c: parseFloat(v.close),
+        v: v.volume != null ? parseFloat(v.volume) : 0
+      }))
+      .reverse(); // Twelve Data returns newest-first; we want chronological
+
+    const analysis = analyze(candles, data.meta);
+    render(symbol, interval, data.meta, analysis, candles);
+    statusEl.textContent = `✅ تم — ${candles.length} شمعة من ${candles[0].t} إلى ${candles[candles.length-1].t}`;
+  } catch (e) {
+    showErr("❌ " + e.message + "\n\nملاحظة: لو الخطأ CORS أو Failed to fetch، جرّب تتأكد إن المفتاح صحيح ونشط، أو إن حد الطلبات اليومي (800/يوم) ما انتهى.");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showErr(msg){
+  const errEl = el("err");
+  errEl.textContent = msg;
+  errEl.style.display = "block";
+  el("status").textContent = "";
+}
+
+/* ---------- Analysis engine ---------- */
+function analyze(candles, meta){
+  const hasRealVolume = candles.some(c => c.v > 0);
+  const volumeQuality = hasRealVolume ? "real_or_tick" : "range_proxy";
+
+  // --- Volume Profile ---
+  const lo = Math.min(...candles.map(c => c.l));
+  const hi = Math.max(...candles.map(c => c.h));
+  const BINS = 30;
+  const binSize = (hi - lo) / BINS || 1;
+  const bins = Array.from({length: BINS}, (_, i) => ({
+    priceLow: lo + i * binSize, priceHigh: lo + (i + 1) * binSize, vol: 0
+  }));
+
+  candles.forEach(c => {
+    const weight = hasRealVolume ? (c.v || 0) : (c.h - c.l); // fallback proxy when no real volume
+    const typical = (c.h + c.l + c.c) / 3;
+    let idx = Math.floor((typical - lo) / binSize);
+    idx = Math.max(0, Math.min(BINS - 1, idx));
+    bins[idx].vol += weight;
+  });
+
+  const totalVol = bins.reduce((s, b) => s + b.vol, 0) || 1;
+  let pocIdx = 0;
+  bins.forEach((b, i) => { if (b.vol > bins[pocIdx].vol) pocIdx = i; });
+  const poc = (bins[pocIdx].priceLow + bins[pocIdx].priceHigh) / 2;
+
+  // Value area: expand from POC until 68% of volume covered
+  let vaLowIdx = pocIdx, vaHighIdx = pocIdx, covered = bins[pocIdx].vol;
+  while (covered / totalVol < 0.68 && (vaLowIdx > 0 || vaHighIdx < BINS - 1)) {
+    const downVol = vaLowIdx > 0 ? bins[vaLowIdx - 1].vol : -1;
+    const upVol = vaHighIdx < BINS - 1 ? bins[vaHighIdx + 1].vol : -1;
+    if (upVol >= downVol) { vaHighIdx++; covered += bins[vaHighIdx].vol; }
+    else { vaLowIdx--; covered += bins[vaLowIdx].vol; }
+  }
+  const valueAreaLow = bins[vaLowIdx].priceLow;
+  const valueAreaHigh = bins[vaHighIdx].priceHigh;
+
+  // Shape heuristic: where does POC sit within the range, and how concentrated is volume?
+  const pocPosition = (poc - lo) / (hi - lo); // 0 = bottom, 1 = top
+  const concentration = bins[pocIdx].vol / totalVol;
+  const nonEmptyBins = bins.filter(b => b.vol > totalVol * 0.02).length;
+  let shape;
+  if (nonEmptyBins <= BINS * 0.35 && concentration > 0.12) shape = "Thin";
+  else if (pocPosition >= 0.62) shape = "P";
+  else if (pocPosition <= 0.38) shape = "b";
+  else shape = "D";
+
+  // --- Swing highs/lows with strong/weak classification ---
+  const K = 3;
+  const swings = [];
+  for (let i = K; i < candles.length - K; i++){
+    const c = candles[i];
+    const isHigh = candles.slice(i-K,i).every(x=>x.h<=c.h) && candles.slice(i+1,i+1+K).every(x=>x.h<=c.h);
+    const isLow  = candles.slice(i-K,i).every(x=>x.l>=c.l) && candles.slice(i+1,i+1+K).every(x=>x.l>=c.l);
+    if (isHigh || isLow){
+      const range = c.h - c.l || 1e-9;
+      const upperWick = c.h - Math.max(c.o,c.c);
+      const lowerWick = Math.min(c.o,c.c) - c.l;
+      const wickRatio = isHigh ? upperWick/range : lowerWick/range;
+      swings.push({
+        i, t: c.t, type: isHigh ? "high" : "low", price: isHigh ? c.h : c.l,
+        strength: wickRatio >= 0.45 ? "strong" : "weak"
+      });
+    }
+  }
+  const recentSwings = swings.slice(-8);
+
+  // --- Support/resistance flip candidates: 2+ touches within 0.15% then a close beyond ---
+  const tolerance = (hi - lo) * 0.006;
+  const flipCandidates = [];
+  for (let i = 0; i < swings.length; i++){
+    const cluster = swings.filter(s => Math.abs(s.price - swings[i].price) <= tolerance && s.type === swings[i].type);
+    if (cluster.length >= 2){
+      const level = cluster.reduce((s,c)=>s+c.price,0)/cluster.length;
+      const lastTouchIdx = Math.max(...cluster.map(c=>c.i));
+      const breached = candles.slice(lastTouchIdx+1).some(c =>
+        cluster[0].type === "high" ? c.c > level + tolerance : c.c < level - tolerance);
+      const already = flipCandidates.some(f => Math.abs(f.level - level) <= tolerance);
+      if (!already) flipCandidates.push({ level, type: cluster[0].type, touches: cluster.length, breached });
+    }
+  }
+
+  const last = candles[candles.length - 1];
+
+  return { lo, hi, bins, poc, pocIdx, valueAreaLow, valueAreaHigh, shape, volumeQuality,
+           swings: recentSwings, flipCandidates: flipCandidates.slice(0,4), last, totalVol };
+}
+
+/* ---------- Report rendering ---------- */
+function render(symbol, interval, meta, a, candles){
+  const fmt = (n) => n.toFixed(n < 10 ? 5 : n < 1000 ? 3 : 2);
+  const lastStrong = a.swings.filter(s=>s.strength==="strong").slice(-2);
+  const lastWeak = a.swings.filter(s=>s.strength==="weak").slice(-2);
+
+  let setupText = "لا يوجد تطابق واضح لإعداد Setup محدد — البنية غير كافية للحكم.";
+  const nearPOC = Math.abs(a.last.c - a.poc) <= (a.hi - a.lo) * 0.03;
+  if (a.shape === "D"){
+    setupText = `**D-profile Setup**: السعر الحالي ${nearPOC ? "قريب من" : "بعيد عن"} POC (${fmt(a.poc)}). حسب الكتاب: شورت عند تجمعات قرب قمة الـD، لونق عند تجمعات قرب قاعه، وPOC هدف جيد.`;
+  } else if (a.shape === "P"){
+    setupText = `**P-profile Setup**: تجميع عدواني عند القمة يرجّح استمرار صاعد بعد pullback. POC (${fmt(a.poc)}) يُتوقع يشتغل دعم.`;
+  } else if (a.shape === "b"){
+    setupText = `**b-profile Setup**: تجميع عدواني عند القاع يرجّح استمرار هابط بعد pullback. POC (${fmt(a.poc)}) يُتوقع يشتغل مقاومة.`;
+  } else if (a.shape === "Thin"){
+    setupText = `**Thin profile**: ترند سريع، الفوليوم قليل — أي تجمع صغير ظاهر بالبروفايل يشتغل دعم/مقاومة حسب اتجاه الترند.`;
+  }
+
+  const flipText = a.flipCandidates.length
+    ? a.flipCandidates.map(f =>
+        `- مستوى ${fmt(f.level)} (${f.type === "high" ? "قمة" : "قاع"}، ${f.touches} لمسات)${f.breached ? " — **تم اختراقه، مرشح انقلاب دور (support/resistance flip)**" : " — لسا ما انكسر"}`
+      ).join("\n")
+    : "ما لقيت مستوى واضح بلمستين أو أكثر بهذا النطاق من الشموع.";
+
+  const html = `
+<h1>Technical Read — ${escapeHtml(symbol)} (${interval})</h1>
+
+<h2>ما هو ظاهر بالبيانات</h2>
+${candles.length} شمعة من ${a.lo === a.hi ? "-" : escapeHtml(candles[0].t)} إلى ${escapeHtml(candles[candles.length-1].t)}.
+السعر الحالي: <b>${fmt(a.last.c)}</b>. النطاق الكامل: ${fmt(a.lo)} – ${fmt(a.hi)}.
+${a.volumeQuality === "range_proxy" ? '<div class="warn">⚠️ ما فيه بيانات حجم حقيقي لهذي الأداة (طبيعي بالفوركس/المعادن) — استخدمت مدى الشمعة (High-Low) كتقريب بديل للفوليوم. اعتبر قراءة Volume Profile تقريبية، مو دقيقة.</div>' : ''}
+
+<h2>Volume Profile read</h2>
+<b>الشكل الأقرب: ${a.shape}-profile</b><br>
+${RULES.shapeDefs[a.shape]}<br><br>
+POC (أثقل منطقة): <b>${fmt(a.poc)}</b><br>
+Value Area: ${fmt(a.valueAreaLow)} – ${fmt(a.valueAreaHigh)}
+
+<h2>Price Action signals</h2>
+${lastStrong.length ? `نقاط قوية أخيرة (strong): ${lastStrong.map(s=>`${s.type==="high"?"قمة":"قاع"} ${fmt(s.price)}`).join("، ")}` : "ما فيه نقاط قوية واضحة بآخر الشموع."}<br>
+${lastWeak.length ? `نقاط ضعيفة أخيرة (weak، احذر الاختراق منها): ${lastWeak.map(s=>`${s.type==="high"?"قمة":"قاع"} ${fmt(s.price)}`).join("، ")}` : ""}
+
+<h2>مرشحات انقلاب دعم/مقاومة (Support/Resistance Flip)</h2>
+${flipText}
+
+<h2>Order Flow confirmations</h2>
+غير متاح — Twelve Data ما يوفر بيانات footprint/DOM، هذا فوليوم عادي (أو تقريبي) بس.
+
+<h2>Matching setup(s)</h2>
+${setupText}<br><br>
+<i>${RULES.coreFilterText}</i>
+
+<h2>Suggested levels (شرطية، مو توصية)</h2>
+${RULES.intradayPTSL}
+
+<h2>Confidence & limitations</h2>
+- هذا حساب آلي بسيط (heuristic)، مو تحليل بشري دقيق — تحقق بعينك من الشارت قبل أي قرار.<br>
+- بيانات الفوركس/المعادن من Twelve Data تقريبية (مو tick-precise حسب الكتاب نفسه).<br>
+- ما فيه Order Flow ولا سياق أخبار/macro بهذا التحليل.
+
+<div class="disclaimer">${RULES.disclaimer}</div>
+`;
+  el("report").innerHTML = html;
+  el("report").style.display = "block";
+
+  drawChart(candles, a);
+  el("chartCard").style.display = "block";
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+/* ---------- Canvas chart: candles + volume profile bars ---------- */
+function drawChart(candles, a){
+  const canvas = el("chart");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = "#0f1320";
+  ctx.fillRect(0,0,W,H);
+
+  const profileW = 130;
+  const chartX0 = 10, chartX1 = W - profileW - 10;
+  const chartY0 = 16, chartY1 = H - 16;
+  const lo = a.lo, hi = a.hi;
+  const priceToY = (p) => chartY1 - ((p - lo) / (hi - lo)) * (chartY1 - chartY0);
+
+  // candles
+  const n = candles.length;
+  const cw = (chartX1 - chartX0) / n;
+  candles.forEach((c, i) => {
+    const x = chartX0 + i * cw + cw/2;
+    const up = c.c >= c.o;
+    ctx.strokeStyle = ctx.fillStyle = up ? "#26a69a" : "#ef5350";
+    ctx.beginPath();
+    ctx.moveTo(x, priceToY(c.h));
+    ctx.lineTo(x, priceToY(c.l));
+    ctx.stroke();
+    const bodyTop = priceToY(Math.max(c.o,c.c));
+    const bodyBot = priceToY(Math.min(c.o,c.c));
+    ctx.fillRect(x - cw*0.35, bodyTop, cw*0.7, Math.max(1, bodyBot - bodyTop));
+  });
+
+  // POC / value area lines
+  ctx.strokeStyle = "#e0a72e";
+  ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.moveTo(chartX0, priceToY(a.poc)); ctx.lineTo(chartX1, priceToY(a.poc)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // volume profile bars
+  const maxVol = Math.max(...a.bins.map(b=>b.vol)) || 1;
+  a.bins.forEach(b => {
+    const y = priceToY((b.priceLow+b.priceHigh)/2);
+    const barW = (b.vol / maxVol) * (profileW - 10);
+    ctx.fillStyle = b.vol === Math.max(...a.bins.map(x=>x.vol)) ? "#e0a72e" : "#4f8cff88";
+    ctx.fillRect(chartX1 + 8, y - 2, barW, 4);
+  });
+
+  ctx.fillStyle = "#8b93a7";
+  ctx.font = "11px sans-serif";
+  ctx.fillText(`POC ${a.poc.toFixed(2)}`, chartX1 + 8, priceToY(a.poc) - 6);
+}
+</script>
+</body>
+</html>
