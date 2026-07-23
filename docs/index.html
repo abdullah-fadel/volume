@@ -98,6 +98,18 @@
           <option value="1000" selected>1000</option>
         </select>
       </div>
+      <div>
+        <label>نطاق حساب Volume Profile</label>
+        <select id="profileScope">
+          <option value="full" selected>كل النافذة المجلوبة (افتراضي)</option>
+          <option value="s1">نطاق قصير (آخر جلسة/فترة قريبة)</option>
+          <option value="s2">نطاق متوسط (آخر أسبوع تقريبًا)</option>
+        </select>
+      </div>
+    </div>
+    <div class="note">
+      🎯 هذا يطبّق فكرة <b>Flexible Volume Profile</b>: بدل بروفايل واحد ثابت على كل البيانات، تقدر تحدد نطاق مرن (جلسة/أسبوع) يُحسب منه POC وValue Area وشكل البروفايل فقط —
+      بينما بنية السعر (القمم/القيعان وانقلاب الدعم/المقاومة) وVWAP تبقى محسوبة على كامل النافذة المجلوبة للسياق العام.
     </div>
 
     <div style="margin-top:14px">
@@ -150,6 +162,17 @@ const RULES = {
   disclaimer: "⚠️ تحليل تعليمي فقط، مبني على أطر Trader Dale المطبّقة على بيانات حقيقية مجلوبة من Twelve Data — ليس نصيحة استثمارية، وليس توصية تداول، وليس بديلاً عن إدارة المخاطر الخاصة بك. التداول ينطوي على مخاطر خسارة كبيرة، والبيانات المجانية قد تكون متأخرة أو تقريبية (خصوصًا الفوركس/الذهب اللي بيانات حجمه tick-based مو حجم تداول حقيقي)."
 };
 
+/* ---------- Flexible Volume Profile: candle-count lookup per interval for the "session" / "week" scopes ---------- */
+const SCOPE_CANDLES = {
+  "5min":  { s1: 288, s2: 1440 },
+  "15min": { s1: 96,  s2: 480  },
+  "30min": { s1: 48,  s2: 240  },
+  "1h":    { s1: 24,  s2: 120  },
+  "4h":    { s1: 6,   s2: 30   },
+  "1day":  { s1: 5,   s2: 21   },
+  "1week": { s1: 4,   s2: 12   }
+};
+
 /* ---------- DOM wiring ---------- */
 const el = (id) => document.getElementById(id);
 el("symbolPreset").addEventListener("change", () => {
@@ -173,6 +196,7 @@ async function runAnalysis(){
     : el("symbolPreset").value;
   const interval = el("interval").value;
   const outputsize = el("outputsize").value;
+  const profileScope = el("profileScope").value;
   const apiKey = el("apiKey").value.trim();
 
   if (!symbol){ showErr("لازم تكتب اسم الأداة."); return; }
@@ -205,7 +229,7 @@ async function runAnalysis(){
       }))
       .reverse(); // Twelve Data returns newest-first; we want chronological
 
-    const analysis = analyze(candles, data.meta);
+    const analysis = analyze(candles, data.meta, interval, profileScope);
     render(symbol, interval, data.meta, analysis, candles);
     statusEl.textContent = `✅ تم — ${candles.length} شمعة من ${candles[0].t} إلى ${candles[candles.length-1].t}`;
   } catch (e) {
@@ -222,21 +246,17 @@ function showErr(msg){
   el("status").textContent = "";
 }
 
-/* ---------- Analysis engine ---------- */
-function analyze(candles, meta){
-  const hasRealVolume = candles.some(c => c.v > 0);
-  const volumeQuality = hasRealVolume ? "real_or_tick" : "range_proxy";
-
-  // --- Volume Profile ---
-  const lo = Math.min(...candles.map(c => c.l));
-  const hi = Math.max(...candles.map(c => c.h));
+/* ---------- Flexible Volume Profile: bins/POC/Value Area/shape for a given candle window ---------- */
+function computeVolumeProfile(vpCandles, hasRealVolume){
+  const lo = Math.min(...vpCandles.map(c => c.l));
+  const hi = Math.max(...vpCandles.map(c => c.h));
   const BINS = 30;
   const binSize = (hi - lo) / BINS || 1;
   const bins = Array.from({length: BINS}, (_, i) => ({
     priceLow: lo + i * binSize, priceHigh: lo + (i + 1) * binSize, vol: 0
   }));
 
-  candles.forEach(c => {
+  vpCandles.forEach(c => {
     const weight = hasRealVolume ? (c.v || 0) : (c.h - c.l); // fallback proxy when no real volume
     const typical = (c.h + c.l + c.c) / 3;
     let idx = Math.floor((typical - lo) / binSize);
@@ -261,7 +281,7 @@ function analyze(candles, meta){
   const valueAreaHigh = bins[vaHighIdx].priceHigh;
 
   // Shape heuristic: where does POC sit within the range, and how concentrated is volume?
-  const pocPosition = (poc - lo) / (hi - lo); // 0 = bottom, 1 = top
+  const pocPosition = (poc - lo) / ((hi - lo) || 1); // 0 = bottom, 1 = top
   const concentration = bins[pocIdx].vol / totalVol;
   const nonEmptyBins = bins.filter(b => b.vol > totalVol * 0.02).length;
   let shape;
@@ -269,6 +289,31 @@ function analyze(candles, meta){
   else if (pocPosition >= 0.62) shape = "P";
   else if (pocPosition <= 0.38) shape = "b";
   else shape = "D";
+
+  return { lo, hi, bins, poc, pocIdx, valueAreaLow, valueAreaHigh, shape, totalVol };
+}
+
+/* ---------- Analysis engine ---------- */
+function analyze(candles, meta, interval, profileScope){
+  const hasRealVolume = candles.some(c => c.v > 0);
+  const volumeQuality = hasRealVolume ? "real_or_tick" : "range_proxy";
+
+  // --- Chart-wide range (used for candlestick scaling and general zone sizing) ---
+  const lo = Math.min(...candles.map(c => c.l));
+  const hi = Math.max(...candles.map(c => c.h));
+
+  // --- Flexible Volume Profile: scope it to a recent sub-window instead of always the whole fetch ---
+  const scopeMap = SCOPE_CANDLES[interval] || {};
+  let vpLen = candles.length;
+  let scopeLabel = "كل النافذة المجلوبة";
+  if (profileScope === "s1" && scopeMap.s1) { vpLen = Math.min(scopeMap.s1, candles.length); scopeLabel = "نطاق قصير (آخر جلسة/فترة قريبة)"; }
+  else if (profileScope === "s2" && scopeMap.s2) { vpLen = Math.min(scopeMap.s2, candles.length); scopeLabel = "نطاق متوسط (آخر أسبوع تقريبًا)"; }
+  const vpCandles = candles.slice(-vpLen);
+  const vp = computeVolumeProfile(vpCandles, hasRealVolume);
+  vp.scopeLabel = scopeLabel;
+  vp.candleCount = vpCandles.length;
+  vp.fromT = vpCandles[0].t;
+  vp.toT = vpCandles[vpCandles.length - 1].t;
 
   // --- Swing highs/lows with strong/weak classification ---
   const K = 3;
@@ -334,22 +379,24 @@ function analyze(candles, meta){
   const vwapLowerLast = vwapLower[vwapLower.length - 1];
   const vwapRegime = (last.c > vwapUpperLast || last.c < vwapLowerLast) ? "trend" : "rotation";
 
-  return { lo, hi, bins, poc, pocIdx, valueAreaLow, valueAreaHigh, shape, volumeQuality, trendDir,
-           swings: recentSwings, flipCandidates: flipCandidates.slice(0,4), last, totalVol,
+  return { lo, hi, vp, volumeQuality, trendDir,
+           swings: recentSwings, flipCandidates: flipCandidates.slice(0,4), last,
            vwapSeries, vwapUpper, vwapLower, vwapLast, vwapUpperLast, vwapLowerLast, vwapRegime };
 }
 
 /* ---------- Trade decision: buy / sell / wait + entry, stop, targets ---------- */
 function decideVP(a){
-  const range = a.hi - a.lo || 1e-9;
+  // Zone sizing scales with the profile's own scoped range (not the whole chart) so a
+  // session-anchored profile produces session-appropriate stops/targets, not oversized ones.
+  const range = a.vp.hi - a.vp.lo || 1e-9;
   const buffer = range * 0.01;
   const tol = range * 0.05;
   const price = a.last.c;
   const strongHighs = a.swings.filter(s=>s.type==="high" && s.strength==="strong").map(s=>s.price);
   const strongLows  = a.swings.filter(s=>s.type==="low"  && s.strength==="strong").map(s=>s.price);
-  const nearTop = price >= a.valueAreaHigh - tol || strongHighs.some(h=>Math.abs(price-h)<=tol);
-  const nearBottom = price <= a.valueAreaLow + tol || strongLows.some(l=>Math.abs(price-l)<=tol);
-  const nearPOC = Math.abs(price - a.poc) <= tol;
+  const nearTop = price >= a.vp.valueAreaHigh - tol || strongHighs.some(h=>Math.abs(price-h)<=tol);
+  const nearBottom = price <= a.vp.valueAreaLow + tol || strongLows.some(l=>Math.abs(price-l)<=tol);
+  const nearPOC = Math.abs(price - a.vp.poc) <= tol;
 
   let signal = "wait", entryLow=null, entryHigh=null, stop=null, t1=null, t2=null, why="";
 
@@ -370,32 +417,32 @@ function decideVP(a){
     t2 = Math.min(t2v, t1 - buffer);
   }
 
-  if (a.shape === "D"){
+  if (a.vp.shape === "D"){
     if (nearTop && !nearBottom){
       signal = "sell";
-      const level = strongHighs.length ? Math.max(...strongHighs) : a.valueAreaHigh;
-      setSellZone(level, a.poc, a.valueAreaLow);
+      const level = strongHighs.length ? Math.max(...strongHighs) : a.vp.valueAreaHigh;
+      setSellZone(level, a.vp.poc, a.vp.valueAreaLow);
       why = "السعر عند قمة D-profile — منطقة رفض بيع محتملة، Core Filter يحتاج تأكيد رفض واضح على الشارت الحقيقي قبل الدخول.";
     } else if (nearBottom && !nearTop){
       signal = "buy";
-      const level = strongLows.length ? Math.min(...strongLows) : a.valueAreaLow;
-      setBuyZone(level, a.poc, a.valueAreaHigh);
+      const level = strongLows.length ? Math.min(...strongLows) : a.vp.valueAreaLow;
+      setBuyZone(level, a.vp.poc, a.vp.valueAreaHigh);
       why = "السعر عند قاع D-profile — منطقة رفض شراء محتملة، Core Filter يحتاج تأكيد رفض واضح على الشارت الحقيقي قبل الدخول.";
     } else {
       why = "السعر بمنتصف D-profile، مو عند قمة ولا قاع — لا يوجد إعداد دخول واضح الآن حسب الكتاب.";
     }
-  } else if (a.shape === "P"){
+  } else if (a.vp.shape === "P"){
     if (nearPOC){
       signal = "buy";
-      setBuyZone(a.poc, a.valueAreaHigh, a.hi);
+      setBuyZone(a.vp.poc, a.vp.valueAreaHigh, a.vp.hi);
       why = "P-profile: POC يُتوقع يشتغل دعم لاستمرار صاعد بعد pullback.";
     } else {
       why = "P-profile (بائعين ضعفاء) لكن السعر بعيد عن POC — انتظر السعر يرجع لمنطقة POC قبل أي دخول.";
     }
-  } else if (a.shape === "b"){
+  } else if (a.vp.shape === "b"){
     if (nearPOC){
       signal = "sell";
-      setSellZone(a.poc, a.valueAreaLow, a.lo);
+      setSellZone(a.vp.poc, a.vp.valueAreaLow, a.vp.lo);
       why = "b-profile: POC يُتوقع يشتغل مقاومة لاستمرار هابط بعد pullback.";
     } else {
       why = "b-profile (مشترين ضعفاء) لكن السعر بعيد عن POC — انتظر السعر يرجع لمنطقة POC قبل أي دخول.";
@@ -403,11 +450,11 @@ function decideVP(a){
   } else { // Thin
     if (nearPOC && a.trendDir === "up"){
       signal = "buy";
-      setBuyZone(a.poc, a.hi, a.hi + range*0.5);
+      setBuyZone(a.vp.poc, a.vp.hi, a.vp.hi + range*0.5);
       why = "Thin profile بترند صاعد: التجمع الوحيد الظاهر بالبروفايل يشتغل دعم استمرار.";
     } else if (nearPOC && a.trendDir === "down"){
       signal = "sell";
-      setSellZone(a.poc, a.lo, a.lo - range*0.5);
+      setSellZone(a.vp.poc, a.vp.lo, a.vp.lo - range*0.5);
       why = "Thin profile بترند هابط: التجمع الوحيد الظاهر بالبروفايل يشتغل مقاومة استمرار.";
     } else {
       why = "Thin profile لكن السعر بعيد عن التجمع الوحيد الظاهر — انتظر السعر يرجع له.";
@@ -497,14 +544,14 @@ function render(symbol, interval, meta, a, candles){
 <div class="mini-disclaimer">⚠️ تعليمي فقط، حساب آلي تقريبي مبني على بيانات Twelve Data — مو نصيحة استثمارية، والقرار والمخاطرة عليك.</div>`;
 
   let setupText = "لا يوجد تطابق واضح لإعداد Setup محدد — البنية غير كافية للحكم.";
-  const nearPOC = Math.abs(a.last.c - a.poc) <= (a.hi - a.lo) * 0.03;
-  if (a.shape === "D"){
-    setupText = `**D-profile Setup**: السعر الحالي ${nearPOC ? "قريب من" : "بعيد عن"} POC (${fmt(a.poc)}). حسب الكتاب: شورت عند تجمعات قرب قمة الـD، لونق عند تجمعات قرب قاعه، وPOC هدف جيد.`;
-  } else if (a.shape === "P"){
-    setupText = `**P-profile Setup**: تجميع عدواني عند القمة يرجّح استمرار صاعد بعد pullback. POC (${fmt(a.poc)}) يُتوقع يشتغل دعم.`;
-  } else if (a.shape === "b"){
-    setupText = `**b-profile Setup**: تجميع عدواني عند القاع يرجّح استمرار هابط بعد pullback. POC (${fmt(a.poc)}) يُتوقع يشتغل مقاومة.`;
-  } else if (a.shape === "Thin"){
+  const nearPOC = Math.abs(a.last.c - a.vp.poc) <= (a.hi - a.lo) * 0.03;
+  if (a.vp.shape === "D"){
+    setupText = `**D-profile Setup**: السعر الحالي ${nearPOC ? "قريب من" : "بعيد عن"} POC (${fmt(a.vp.poc)}). حسب الكتاب: شورت عند تجمعات قرب قمة الـD، لونق عند تجمعات قرب قاعه، وPOC هدف جيد.`;
+  } else if (a.vp.shape === "P"){
+    setupText = `**P-profile Setup**: تجميع عدواني عند القمة يرجّح استمرار صاعد بعد pullback. POC (${fmt(a.vp.poc)}) يُتوقع يشتغل دعم.`;
+  } else if (a.vp.shape === "b"){
+    setupText = `**b-profile Setup**: تجميع عدواني عند القاع يرجّح استمرار هابط بعد pullback. POC (${fmt(a.vp.poc)}) يُتوقع يشتغل مقاومة.`;
+  } else if (a.vp.shape === "Thin"){
     setupText = `**Thin profile**: ترند سريع، الفوليوم قليل — أي تجمع صغير ظاهر بالبروفايل يشتغل دعم/مقاومة حسب اتجاه الترند.`;
   }
 
@@ -527,10 +574,11 @@ ${candles.length} شمعة من ${a.lo === a.hi ? "-" : escapeHtml(candles[0].t)
 ${a.volumeQuality === "range_proxy" ? '<div class="warn">⚠️ ما فيه بيانات حجم حقيقي لهذي الأداة (طبيعي بالفوركس/المعادن) — استخدمت مدى الشمعة (High-Low) كتقريب بديل للفوليوم. اعتبر قراءة Volume Profile تقريبية، مو دقيقة.</div>' : ''}
 
 <h2>Volume Profile read</h2>
-<b>الشكل الأقرب: ${a.shape}-profile</b><br>
-${RULES.shapeDefs[a.shape]}<br><br>
-POC (أثقل منطقة): <b>${fmt(a.poc)}</b><br>
-Value Area: ${fmt(a.valueAreaLow)} – ${fmt(a.valueAreaHigh)}
+نطاق الحساب (Flexible Volume Profile): <b>${escapeHtml(a.vp.scopeLabel)}</b> — ${a.vp.candleCount} شمعة (من ${escapeHtml(a.vp.fromT)} إلى ${escapeHtml(a.vp.toT)})<br><br>
+<b>الشكل الأقرب: ${a.vp.shape}-profile</b><br>
+${RULES.shapeDefs[a.vp.shape]}<br><br>
+POC (أثقل منطقة): <b>${fmt(a.vp.poc)}</b><br>
+Value Area: ${fmt(a.vp.valueAreaLow)} – ${fmt(a.vp.valueAreaHigh)}
 
 <h2>VWAP read</h2>
 VWAP (من بداية النافذة المجلوبة): <b>${fmt(a.vwapLast)}</b><br>
@@ -610,7 +658,7 @@ function drawChart(candles, a){
   // POC / value area lines
   ctx.strokeStyle = "#e0a72e";
   ctx.setLineDash([4,3]);
-  ctx.beginPath(); ctx.moveTo(chartX0, priceToY(a.poc)); ctx.lineTo(chartX1, priceToY(a.poc)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(chartX0, priceToY(a.vp.poc)); ctx.lineTo(chartX1, priceToY(a.vp.poc)); ctx.stroke();
   ctx.setLineDash([]);
 
   // VWAP line + 1st deviation band
@@ -632,17 +680,17 @@ function drawChart(candles, a){
   ctx.setLineDash([]);
 
   // volume profile bars
-  const maxVol = Math.max(...a.bins.map(b=>b.vol)) || 1;
-  a.bins.forEach(b => {
+  const maxVol = Math.max(...a.vp.bins.map(b=>b.vol)) || 1;
+  a.vp.bins.forEach(b => {
     const y = priceToY((b.priceLow+b.priceHigh)/2);
     const barW = (b.vol / maxVol) * (profileW - 10);
-    ctx.fillStyle = b.vol === Math.max(...a.bins.map(x=>x.vol)) ? "#e0a72e" : "#4f8cff88";
+    ctx.fillStyle = b.vol === maxVol ? "#e0a72e" : "#4f8cff88";
     ctx.fillRect(chartX1 + 8, y - 2, barW, 4);
   });
 
   ctx.fillStyle = "#8b93a7";
   ctx.font = "11px sans-serif";
-  ctx.fillText(`POC ${a.poc.toFixed(2)}`, chartX1 + 8, priceToY(a.poc) - 6);
+  ctx.fillText(`POC ${a.vp.poc.toFixed(2)}`, chartX1 + 8, priceToY(a.vp.poc) - 6);
 }
 </script>
 </body>
