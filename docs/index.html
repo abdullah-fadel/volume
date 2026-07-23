@@ -253,6 +253,73 @@ async function fetchNewsCalendar(symbol, newsApiKey){
   }
 }
 
+/* ---------- Historical News Reaction (separate opinion, experimental) ----------
+   How did this pair move after the last few times this same event was released?
+   Deliberately kept OUT of decide()/the verdict entirely — this only feeds its own
+   standalone section at the bottom of the report, never the buy/sell logic, because
+   the sample size (a handful of past releases) is too small to treat as a signal. */
+function fmtDateForTwelveData(d){
+  const pad = n => String(n).padStart(2,"0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
+}
+async function fetchPastEventDates(country, title, newsApiKey, maxSamples){
+  const to = new Date();
+  const from = new Date(to.getTime() - 400 * 24 * 60 * 60 * 1000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  const url = `https://fcsapi.com/api-v3/forex/economy_calendar?symbol=${encodeURIComponent(country)}&from=${fmt(from)}&to=${fmt(to)}&access_key=${encodeURIComponent(newsApiKey)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data || data.status === false || !Array.isArray(data.response)) return [];
+  const norm = s => String(s || "").trim().toLowerCase();
+  const wanted = norm(title);
+  const now = Date.now();
+  let matches = data.response.filter(e => norm(e.title || e.event || e.name) === wanted);
+  if (!matches.length){
+    matches = data.response.filter(e => {
+      const t = norm(e.title || e.event || e.name);
+      return t && (t.includes(wanted) || wanted.includes(t));
+    });
+  }
+  return matches
+    .map(e => Date.parse(e.date || e.datetime || e.time))
+    .filter(t => !isNaN(t) && t < now)
+    .sort((a, b) => b - a)
+    .slice(0, maxSamples);
+}
+async function fetchPriceReaction(symbol, apiKey, eventTimeMs){
+  const before = new Date(eventTimeMs - 60 * 60 * 1000);
+  const after = new Date(eventTimeMs + 3 * 60 * 60 * 1000);
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1h&start_date=${encodeURIComponent(fmtDateForTwelveData(before))}&end_date=${encodeURIComponent(fmtDateForTwelveData(after))}&apikey=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (!data || data.status === "error" || !data.values || data.values.length < 2) return null;
+  const vals = data.values.slice().reverse();
+  const baseline = parseFloat(vals[0].close);
+  const afterPrice = parseFloat(vals[vals.length - 1].close);
+  if (!baseline) return null;
+  const pct = ((afterPrice - baseline) / baseline) * 100;
+  return { pct, direction: pct > 0 ? "up" : pct < 0 ? "down" : "flat" };
+}
+async function fetchHistoricalReaction(symbol, apiKey, newsApiKey, event){
+  if (!event || !newsApiKey) return null;
+  try {
+    const pastDates = await fetchPastEventDates(event.country, event.title, newsApiKey, 6);
+    if (!pastDates.length) return { eventTitle: event.title, sampleSize: 0 };
+    const reactions = [];
+    for (const t of pastDates){
+      const r = await fetchPriceReaction(symbol, apiKey, t);
+      if (r) reactions.push(r);
+    }
+    if (!reactions.length) return { eventTitle: event.title, sampleSize: 0 };
+    const upCount = reactions.filter(r => r.direction === "up").length;
+    const downCount = reactions.filter(r => r.direction === "down").length;
+    const avgAbsPct = reactions.reduce((s, r) => s + Math.abs(r.pct), 0) / reactions.length;
+    return { eventTitle: event.title, sampleSize: reactions.length, upCount, downCount, avgAbsPct };
+  } catch (err){
+    return { eventTitle: event.title, error: err.message };
+  }
+}
+
 async function runAnalysis(){
   const btn = el("go");
   const statusEl = el("status");
@@ -307,7 +374,16 @@ async function runAnalysis(){
     statusEl.textContent = "📰 يتحقق من التقويم الاقتصادي...";
     const newsInfo = await fetchNewsCalendar(symbol, newsApiKey);
 
-    render(symbol, interval, data.meta, analysis, candles, newsInfo);
+    let historicalReaction = null;
+    if (newsInfo && newsInfo.events && newsInfo.events.length){
+      statusEl.textContent = "📊 يحسب الميل التاريخي (هامش منفصل، تجريبي)...";
+      const now = Date.now();
+      const nearestEvent = newsInfo.events.slice()
+        .sort((x, y) => Math.abs(Date.parse(x.date) - now) - Math.abs(Date.parse(y.date) - now))[0];
+      historicalReaction = await fetchHistoricalReaction(symbol, apiKey, newsApiKey, nearestEvent);
+    }
+
+    render(symbol, interval, data.meta, analysis, candles, newsInfo, historicalReaction);
     statusEl.textContent = `✅ تم — ${candles.length} شمعة من ${candles[0].t} إلى ${candles[candles.length-1].t}`;
   } catch (e) {
     showErr("❌ " + e.message + "\n\nملاحظة: لو الخطأ CORS أو Failed to fetch، جرّب تتأكد إن المفتاح صحيح ونشط، أو إن حد الطلبات اليومي (800/يوم) ما انتهى.");
@@ -598,7 +674,7 @@ function decide(a){
 }
 
 /* ---------- Report rendering ---------- */
-function render(symbol, interval, meta, a, candles, newsInfo){
+function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction){
   const fmt = (n) => n.toFixed(n < 10 ? 5 : n < 1000 ? 3 : 2);
   const lastStrong = a.swings.filter(s=>s.strength==="strong").slice(-2);
   const lastWeak = a.swings.filter(s=>s.strength==="weak").slice(-2);
@@ -624,6 +700,25 @@ function render(symbol, interval, meta, a, candles, newsInfo){
     }).join("<br>");
     newsHtml = `<div class="warn">📰 <b>Macro News Filter:</b> فيه ${newsInfo.events.length} خبر عالي التأثير قريب من الوقت الحالي (±24 ساعة):<br>${eventLines}<br><br>
 الأرقام معروضة للقراءة اليدوية فقط — الأداة ما تحوّلها لتوقع اتجاه تلقائي (نوع كل مؤشر يغيّر تفسير الفعلي مقابل المتوقع، وحتى تفسير صحيح مو مضمون يتحرك السوق وياه). حسب الكتاب: لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي، وكانسل أي صفقة عكس اتجاه الخبر.</div>`;
+  }
+
+  // Historical News Reaction: a fully separate, experimental side-note shown at the very
+  // bottom of the report. Deliberately never referenced by `d` / the verdict below — small
+  // sample size (a handful of past releases) makes it a "tendency to read", not a signal.
+  let historyHtml = "";
+  if (historicalReaction){
+    if (historicalReaction.error){
+      historyHtml = `<div class="note">📊 الميل التاريخي: تعذر الحساب (${escapeHtml(historicalReaction.error)}).</div>`;
+    } else if (!historicalReaction.sampleSize){
+      historyHtml = `<div class="note">📊 الميل التاريخي: ما لقيت عدد كافي من المرات السابقة لنفس الخبر "${escapeHtml(historicalReaction.eventTitle)}" بالتاريخ المتوفر من FCS API.</div>`;
+    } else {
+      const n = historicalReaction.sampleSize;
+      historyHtml = `
+<h2>📊 هامش منفصل: الميل التاريخي لخبر "${escapeHtml(historicalReaction.eventTitle)}" (تجريبي — رأي إضافي، مو جزء من القرار فوق)</h2>
+آخر ${n} مرة صدر فيها نفس الخبر لهذي العملة: السعر طلع بعدها <b>${historicalReaction.upCount}</b> مرة، ونزل <b>${historicalReaction.downCount}</b> مرة (خلال أول ~3 ساعات بعد الصدور)، بمتوسط حجم حركة تقريبي <b>${historicalReaction.avgAbsPct.toFixed(2)}%</b>.<br><br>
+⚠️ عيّنة صغيرة جدًا (${n} فقط) — هذا وصف لما صار بالماضي، مو توقع ولا ضمان لما يصير الحين. القرار (شراء/بيع/انتظار) فوق ما يعتمد على هالرقم إطلاقًا ولا يتأثر فيه. توقيت الأسعار مقارنةً بتوقيت الخبر تقريبي (فرق مصادر بيانات)، والحساب يستهلك طلبات إضافية من Twelve Data وFCS API في كل مرة يظهر فيها خبر عالي التأثير.
+`;
+    }
   }
 
   // Macro News Filter overrides the technical verdict per the book's rule — a high-impact
@@ -720,6 +815,7 @@ ${RULES.intradayPTSL}
 
 <div class="disclaimer">${RULES.disclaimer}</div>
 </details>
+${historyHtml}
 `;
   el("report").innerHTML = html;
   el("report").style.display = "block";
