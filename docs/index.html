@@ -79,9 +79,9 @@
       <div>
         <label>الفريم (Interval)</label>
         <select id="interval">
-          <option value="5min">5 دقايق</option>
+          <option value="5min" selected>5 دقايق</option>
           <option value="15min">15 دقيقة</option>
-          <option value="30min" selected>30 دقيقة</option>
+          <option value="30min">30 دقيقة</option>
           <option value="1h">ساعة</option>
           <option value="4h">4 ساعات</option>
           <option value="1day">يومي</option>
@@ -89,20 +89,20 @@
         </select>
       </div>
       <div>
-        <label>عدد الشموع</label>
+        <label>عدد الشموع <span style="font-weight:normal;color:var(--muted)">(يتضبط تلقائي حسب النطاق)</span></label>
         <select id="outputsize">
           <option value="90">90</option>
           <option value="180">180</option>
-          <option value="300">300</option>
+          <option value="300" selected>300</option>
           <option value="500">500</option>
-          <option value="1000" selected>1000</option>
+          <option value="1000">1000</option>
         </select>
       </div>
       <div>
         <label>نطاق حساب Volume Profile</label>
         <select id="profileScope">
-          <option value="full" selected>كل النافذة المجلوبة (افتراضي)</option>
-          <option value="s1">نطاق قصير (آخر جلسة/فترة قريبة)</option>
+          <option value="full">كل النافذة المجلوبة</option>
+          <option value="s1" selected>نطاق قصير (آخر جلسة/فترة قريبة — سكالبينغ/إنتراداي سريع)</option>
           <option value="s2">نطاق متوسط (آخر أسبوع تقريبًا)</option>
         </select>
       </div>
@@ -110,6 +110,8 @@
     <div class="note">
       🎯 هذا يطبّق فكرة <b>Flexible Volume Profile</b>: بدل بروفايل واحد ثابت على كل البيانات، تقدر تحدد نطاق مرن (جلسة/أسبوع) يُحسب منه POC وValue Area وشكل البروفايل فقط —
       بينما بنية السعر (القمم/القيعان وانقلاب الدعم/المقاومة) وVWAP تبقى محسوبة على كامل النافذة المجلوبة للسياق العام.
+      الإعداد الافتراضي هنا (5 دقايق + نطاق قصير) مضبوط للتداول السريع (سكالبينغ) حسب توصية الكتاب: "Daily VWAP على فريم 5 دقايق" —
+      و"عدد الشموع" يتضبط تلقائيًا ليقارب يوم تداول واحد فقط، عشان VWAP يصير Daily VWAP فعلي مو ممتد على أسابيع.
     </div>
 
     <div style="margin-top:14px">
@@ -123,6 +125,20 @@
         ⚠️ هذا الموقع صفحة ثابتة على GitHub Pages بدون أي سيرفر خلفي. مفتاحك يُرسل <b>مباشرة من متصفحك</b> إلى Twelve Data فقط،
         وما يمر بأي كود أو مستودع تابع لينا، وما يُخزّن إلا محليًا بجهازك إذا فعّلت الخيار فوق. لا تحط مفتاح حساب مدفوع أو حساس هنا —
         استخدم المفتاح المجاني نفسه المخصص للتجربة.
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <label>مفتاح FCS API (اختياري — فلتر الأخبار الاقتصادية Macro News Filter، من <a href="https://fcsapi.com/pricing" target="_blank" rel="noopener">fcsapi.com</a>، خطة مجانية بدون بطاقة)</label>
+      <input id="newsApiKey" type="password" placeholder="اختياري — اتركه فاضي لتجاهل فلتر الأخبار">
+      <div class="checkline">
+        <input type="checkbox" id="rememberNewsKey">
+        <label for="rememberNewsKey" style="margin:0">احفظ المفتاح بهذا المتصفح فقط (localStorage)</label>
+      </div>
+      <div class="note">
+        📰 لو حطّيت مفتاح، الأداة تجيب التقويم الاقتصادي (CPI, NFP, FOMC, قرارات فائدة...) للعملات المرتبطة بالأداة المختارة، وتحذّرك إذا فيه
+        خبر عالي التأثير قريب — حسب Macro News Filter بكتاب VWAP: "لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي".
+        ⚠️ هذا الجزء تجريبي (endpoint وCORS ما قدرت أتحقق منهم مباشرة أثناء البناء) — لو طلع خطأ وضحه للمطوّر عشان يتصلّح بسرعة، وباقي التحليل يشتغل عادي حتى لو فشل هذا الجزء.
       </div>
     </div>
 
@@ -180,8 +196,59 @@ el("symbolPreset").addEventListener("change", () => {
 });
 const savedKey = localStorage.getItem("td_api_key");
 if (savedKey) { el("apiKey").value = savedKey; el("rememberKey").checked = true; }
+const savedNewsKey = localStorage.getItem("td_news_key");
+if (savedNewsKey) { el("newsApiKey").value = savedNewsKey; el("rememberNewsKey").checked = true; }
+
+/* ---------- Auto-sync "عدد الشموع" to match the chosen interval + Volume Profile scope ---------- */
+function nearestOutputsize(n){
+  const opts = [90,180,300,500,1000];
+  for (const o of opts) if (o >= n) return o;
+  return opts[opts.length - 1];
+}
+function syncOutputsize(){
+  const scope = el("profileScope").value;
+  if (scope === "full") return; // full-window scope: leave the user's own candle-count choice alone
+  const map = SCOPE_CANDLES[el("interval").value] || {};
+  const need = scope === "s1" ? map.s1 : map.s2;
+  if (need) el("outputsize").value = String(nearestOutputsize(need));
+}
+el("interval").addEventListener("change", syncOutputsize);
+el("profileScope").addEventListener("change", syncOutputsize);
+syncOutputsize();
 
 el("go").addEventListener("click", runAnalysis);
+
+/* ---------- Macro News Filter (optional, needs an FCS API key): high-impact economic events near now ---------- */
+function symbolCurrencies(symbol){
+  if (!symbol.includes("/")) return []; // not a pair (e.g. a stock ticker) — no forex calendar relevance
+  return symbol.toUpperCase().split("/").map(s => s.trim()).filter(s => /^[A-Z]{3,4}$/.test(s));
+}
+async function fetchNewsCalendar(symbol, newsApiKey){
+  const currencies = symbolCurrencies(symbol);
+  if (!newsApiKey || !currencies.length) return null;
+  try {
+    const url = `https://fcsapi.com/api-v3/forex/economy_calendar?symbol=${encodeURIComponent(currencies.join(","))}&access_key=${encodeURIComponent(newsApiKey)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data || data.status === false || !Array.isArray(data.response)){
+      return { error: (data && (data.msg || data.message)) || "استجابة غير متوقعة من FCS API" };
+    }
+    const now = Date.now();
+    const windowMs = 24 * 60 * 60 * 1000; // ±24h counts as "قريب من الوقت الحالي"
+    const events = data.response
+      .map(e => ({
+        title: e.title || e.event || e.name || "",
+        country: e.country || e.currency || "",
+        impact: String(e.importance || e.impact || "").toLowerCase(),
+        date: e.date || e.datetime || e.time || null
+      }))
+      .filter(e => { const t = e.date ? Date.parse(e.date) : NaN; return !isNaN(t) && Math.abs(t - now) <= windowMs; })
+      .filter(e => e.impact.includes("high") || e.impact === "3" || e.impact.includes("red"));
+    return { events };
+  } catch (err){
+    return { error: err.message };
+  }
+}
 
 async function runAnalysis(){
   const btn = el("go");
@@ -198,12 +265,15 @@ async function runAnalysis(){
   const outputsize = el("outputsize").value;
   const profileScope = el("profileScope").value;
   const apiKey = el("apiKey").value.trim();
+  const newsApiKey = el("newsApiKey").value.trim();
 
   if (!symbol){ showErr("لازم تكتب اسم الأداة."); return; }
   if (!apiKey){ showErr("لازم تحط مفتاح Twelve Data API."); return; }
 
   if (el("rememberKey").checked) localStorage.setItem("td_api_key", apiKey);
   else localStorage.removeItem("td_api_key");
+  if (el("rememberNewsKey").checked) localStorage.setItem("td_news_key", newsApiKey);
+  else localStorage.removeItem("td_news_key");
 
   btn.disabled = true;
   statusEl.textContent = "⏳ يجيب البيانات من Twelve Data...";
@@ -230,7 +300,11 @@ async function runAnalysis(){
       .reverse(); // Twelve Data returns newest-first; we want chronological
 
     const analysis = analyze(candles, data.meta, interval, profileScope);
-    render(symbol, interval, data.meta, analysis, candles);
+
+    statusEl.textContent = "📰 يتحقق من التقويم الاقتصادي...";
+    const newsInfo = await fetchNewsCalendar(symbol, newsApiKey);
+
+    render(symbol, interval, data.meta, analysis, candles, newsInfo);
     statusEl.textContent = `✅ تم — ${candles.length} شمعة من ${candles[0].t} إلى ${candles[candles.length-1].t}`;
   } catch (e) {
     showErr("❌ " + e.message + "\n\nملاحظة: لو الخطأ CORS أو Failed to fetch، جرّب تتأكد إن المفتاح صحيح ونشط، أو إن حد الطلبات اليومي (800/يوم) ما انتهى.");
@@ -521,11 +595,18 @@ function decide(a){
 }
 
 /* ---------- Report rendering ---------- */
-function render(symbol, interval, meta, a, candles){
+function render(symbol, interval, meta, a, candles, newsInfo){
   const fmt = (n) => n.toFixed(n < 10 ? 5 : n < 1000 ? 3 : 2);
   const lastStrong = a.swings.filter(s=>s.strength==="strong").slice(-2);
   const lastWeak = a.swings.filter(s=>s.strength==="weak").slice(-2);
   const d = decide(a);
+
+  let newsHtml = "";
+  if (newsInfo && newsInfo.error){
+    newsHtml = `<div class="note">📰 فلتر الأخبار: تعذر الجلب (${escapeHtml(newsInfo.error)}) — تأكد من صحة مفتاح FCS API، أو إنه CORS/الخطة تمنع هذا الاستدعاء من المتصفح. باقي التحليل غير متأثر.</div>`;
+  } else if (newsInfo && newsInfo.events && newsInfo.events.length){
+    newsHtml = `<div class="warn">📰 <b>Macro News Filter:</b> فيه ${newsInfo.events.length} خبر عالي التأثير قريب من الوقت الحالي (±24 ساعة): ${newsInfo.events.map(e=>escapeHtml(e.title || e.country)).join("، ")}. حسب الكتاب: لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي، وكانسل أي صفقة عكس اتجاه الخبر.</div>`;
+  }
 
   const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : "⏸ انتظار — لا يوجد إعداد واضح الآن";
   const sourceLabel = d.source === "vwap" ? "VWAP Rotation" : d.source === "vp" ? "Volume Profile" : "";
@@ -562,6 +643,7 @@ function render(symbol, interval, meta, a, candles){
     : "ما لقيت مستوى واضح بلمستين أو أكثر بهذا النطاق من الشموع.";
 
   const html = `
+${newsHtml}
 ${verdictHtml}
 <details>
 <summary>📋 تفاصيل التحليل الكامل (اضغط لعرضها)</summary>
