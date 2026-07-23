@@ -599,16 +599,25 @@ function render(symbol, interval, meta, a, candles, newsInfo){
   const fmt = (n) => n.toFixed(n < 10 ? 5 : n < 1000 ? 3 : 2);
   const lastStrong = a.swings.filter(s=>s.strength==="strong").slice(-2);
   const lastWeak = a.swings.filter(s=>s.strength==="weak").slice(-2);
-  const d = decide(a);
+  let d = decide(a);
 
   let newsHtml = "";
+  const hasHighImpactNews = !!(newsInfo && newsInfo.events && newsInfo.events.length);
   if (newsInfo && newsInfo.error){
     newsHtml = `<div class="note">📰 فلتر الأخبار: تعذر الجلب (${escapeHtml(newsInfo.error)}) — تأكد من صحة مفتاح FCS API، أو إنه CORS/الخطة تمنع هذا الاستدعاء من المتصفح. باقي التحليل غير متأثر.</div>`;
-  } else if (newsInfo && newsInfo.events && newsInfo.events.length){
+  } else if (hasHighImpactNews){
     newsHtml = `<div class="warn">📰 <b>Macro News Filter:</b> فيه ${newsInfo.events.length} خبر عالي التأثير قريب من الوقت الحالي (±24 ساعة): ${newsInfo.events.map(e=>escapeHtml(e.title || e.country)).join("، ")}. حسب الكتاب: لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي، وكانسل أي صفقة عكس اتجاه الخبر.</div>`;
   }
 
-  const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : "⏸ انتظار — لا يوجد إعداد واضح الآن";
+  // Macro News Filter overrides the technical verdict per the book's rule — a high-impact
+  // event nearby cancels any buy/sell, it doesn't just sit next to it as a separate note.
+  if (hasHighImpactNews && d.signal !== "wait"){
+    d = { signal: "wait", entryLow: null, entryHigh: null, stop: null, t1: null, t2: null, rrr: null,
+          why: `⛔ كانت فيه إشارة ${d.signal === "buy" ? "شراء" : "بيع"} (${d.why}) لكن أُلغيت — خبر عالي التأثير قريب (${newsInfo.events.map(e=>e.title || e.country).join("، ")}). الكتاب: لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي.`,
+          source: d.source, newsOverride: true };
+  }
+
+  const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : (d.newsOverride ? "⏸ انتظار — أُلغيت بسبب خبر عالي التأثير" : "⏸ انتظار — لا يوجد إعداد واضح الآن");
   const sourceLabel = d.source === "vwap" ? "VWAP Rotation" : d.source === "vp" ? "Volume Profile" : "";
   const verdictHtml = `
 <div class="verdict ${d.signal}">
