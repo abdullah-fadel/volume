@@ -240,7 +240,10 @@ async function fetchNewsCalendar(symbol, newsApiKey){
         title: e.title || e.event || e.name || "",
         country: e.country || e.currency || "",
         impact: String(e.importance || e.impact || "").toLowerCase(),
-        date: e.date || e.datetime || e.time || null
+        date: e.date || e.datetime || e.time || null,
+        actual: e.actual ?? e.act ?? null,
+        forecast: e.forecast ?? e.consensus ?? e.cons ?? null,
+        previous: e.previous ?? e.prev ?? null
       }))
       .filter(e => { const t = e.date ? Date.parse(e.date) : NaN; return !isNaN(t) && Math.abs(t - now) <= windowMs; })
       .filter(e => e.impact.includes("high") || e.impact === "3" || e.impact.includes("red"));
@@ -606,7 +609,21 @@ function render(symbol, interval, meta, a, candles, newsInfo){
   if (newsInfo && newsInfo.error){
     newsHtml = `<div class="note">📰 فلتر الأخبار: تعذر الجلب (${escapeHtml(newsInfo.error)}) — تأكد من صحة مفتاح FCS API، أو إنه CORS/الخطة تمنع هذا الاستدعاء من المتصفح. باقي التحليل غير متأثر.</div>`;
   } else if (hasHighImpactNews){
-    newsHtml = `<div class="warn">📰 <b>Macro News Filter:</b> فيه ${newsInfo.events.length} خبر عالي التأثير قريب من الوقت الحالي (±24 ساعة): ${newsInfo.events.map(e=>escapeHtml(e.title || e.country)).join("، ")}. حسب الكتاب: لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي، وكانسل أي صفقة عكس اتجاه الخبر.</div>`;
+    // We only surface actual/forecast/previous (when the API provides them) so you can read the
+    // surprise yourself — we deliberately don't auto-guess a price direction from it. Which way a
+    // beat/miss should push a currency depends on the specific indicator (e.g. unemployment rate is
+    // inverted vs. GDP/NFP) and the book itself only uses news as a risk filter, never as a
+    // directional signal, so a hardcoded "beat = up" rule would just be a confident guess.
+    const eventLines = newsInfo.events.map(e => {
+      const nums = [];
+      if (e.actual != null) nums.push(`فعلي: <b>${escapeHtml(String(e.actual))}</b>`);
+      if (e.forecast != null) nums.push(`متوقع: ${escapeHtml(String(e.forecast))}`);
+      if (e.previous != null) nums.push(`سابق: ${escapeHtml(String(e.previous))}`);
+      const numsText = nums.length ? ` (${nums.join(" — ")})` : "";
+      return `- ${escapeHtml(e.title || e.country)}${numsText}`;
+    }).join("<br>");
+    newsHtml = `<div class="warn">📰 <b>Macro News Filter:</b> فيه ${newsInfo.events.length} خبر عالي التأثير قريب من الوقت الحالي (±24 ساعة):<br>${eventLines}<br><br>
+الأرقام معروضة للقراءة اليدوية فقط — الأداة ما تحوّلها لتوقع اتجاه تلقائي (نوع كل مؤشر يغيّر تفسير الفعلي مقابل المتوقع، وحتى تفسير صحيح مو مضمون يتحرك السوق وياه). حسب الكتاب: لا تحتفظ بصفقة إنتراداي وقت خبر أحمر قوي، وكانسل أي صفقة عكس اتجاه الخبر.</div>`;
   }
 
   // Macro News Filter overrides the technical verdict per the book's rule — a high-impact
