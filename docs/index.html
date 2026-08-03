@@ -48,6 +48,8 @@
   .verdict-grid span{display:block;font-size:.75rem;color:var(--muted)}
   .verdict-grid b{font-size:1.05rem}
   .verdict-why{margin-top:12px;font-size:.85rem;color:var(--muted)}
+  .entry-cond{background:#0f1c33;border:1px solid #2a4a7a;border-radius:8px;padding:10px 12px;margin-top:14px;font-size:.88rem;line-height:1.7}
+  .entry-cond b{color:var(--accent)}
   .mini-disclaimer{font-size:.78rem;color:var(--warn);margin-bottom:16px}
   details{margin-top:4px}
   summary{cursor:pointer;color:var(--accent);font-size:.9rem;padding:6px 0}
@@ -622,7 +624,15 @@ function decideVP(a){
     if (risk > 0) rrr = reward / risk;
   }
 
-  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr, source: "vp" };
+  // Per the book's Entry Confirmation Ladder: never enter on first touch — wait for a candle
+  // to CLOSE beyond the entry zone confirming the rejection/hold, then enter on the next
+  // candle's open. "Beyond" means above the zone for a buy (confirms support held), below
+  // the zone for a sell (confirms resistance rejected).
+  const entryTrigger = signal === "buy" ? { direction: "above", level: entryHigh }
+    : signal === "sell" ? { direction: "below", level: entryLow }
+    : null;
+
+  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr, entryTrigger, source: "vp" };
 }
 
 /* ---------- VWAP Rotation signal (fade the 1st deviation band back to VWAP) ---------- */
@@ -642,6 +652,7 @@ function decideVWAP(a){
     const entryMid = (entryLow + entryHigh) / 2;
     const rrr = Math.abs(entryMid - stop) > 0 ? Math.abs(t1 - entryMid) / Math.abs(entryMid - stop) : null;
     return { signal:"sell", entryLow, entryHigh, stop, t1, t2:null, rrr, source:"vwap",
+      entryTrigger: { direction: "below", level: entryLow },
       why: "VWAP Rotation: السعر عند الانحراف الأول العلوي، النظام أفقي (rotation) — يُتوقع رجوع لخط VWAP." };
   }
   if (nearLower && !nearUpper){
@@ -652,6 +663,7 @@ function decideVWAP(a){
     const entryMid = (entryLow + entryHigh) / 2;
     const rrr = Math.abs(entryMid - stop) > 0 ? Math.abs(t1 - entryMid) / Math.abs(entryMid - stop) : null;
     return { signal:"buy", entryLow, entryHigh, stop, t1, t2:null, rrr, source:"vwap",
+      entryTrigger: { direction: "above", level: entryHigh },
       why: "VWAP Rotation: السعر عند الانحراف الأول السفلي، النظام أفقي (rotation) — يُتوقع رجوع لخط VWAP." };
   }
   return null;
@@ -729,8 +741,16 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
           source: d.source, newsOverride: true };
   }
 
-  const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : (d.newsOverride ? "⏸ انتظار — أُلغيت بسبب خبر عالي التأثير" : "⏸ انتظار — لا يوجد إعداد واضح الآن");
+  const symbolBadge = escapeHtml(symbol);
+  const verdictLabel = d.signal === "buy" ? `🟢 شراء ${symbolBadge} (BUY)` : d.signal === "sell" ? `🔴 بيع ${symbolBadge} (SELL)` : (d.newsOverride ? "⏸ انتظار — أُلغيت بسبب خبر عالي التأثير" : "⏸ انتظار — لا يوجد إعداد واضح الآن");
   const sourceLabel = d.source === "vwap" ? "VWAP Rotation" : d.source === "vp" ? "Volume Profile" : "";
+  const entryCondHtml = d.entryTrigger
+    ? `<div class="entry-cond">🕐 <b>شرط دخول الصفقة (متى بالضبط):</b><br>${
+        d.signal === "buy"
+          ? `لا تدخل فورًا لمجرد وصول السعر للمنطقة. ادخل <b>شراء</b> فقط بعد <b>إغلاق شمعة كاملة فوق ${fmt(d.entryTrigger.level)}</b> (تأكيد إن الدعم صمد) — والدخول يصير عند <b>فتح الشمعة التالية</b> لهذا الإغلاق، مو عند لحظة الإغلاق نفسها.`
+          : `لا تدخل فورًا لمجرد وصول السعر للمنطقة. ادخل <b>بيع</b> فقط بعد <b>إغلاق شمعة كاملة تحت ${fmt(d.entryTrigger.level)}</b> (تأكيد الرفض) — والدخول يصير عند <b>فتح الشمعة التالية</b> لهذا الإغلاق، مو عند لحظة الإغلاق نفسها.`
+      }<br><span style="color:var(--muted)">لو ما صار هالإغلاق التأكيدي، الإعداد يبقى مجرد احتمال — تجاهله ولا تدخل.</span></div>`
+    : "";
   const verdictHtml = `
 <div class="verdict ${d.signal}">
   <div class="verdict-badge">${verdictLabel}${sourceLabel ? ` <span class="pill">${sourceLabel}${d.confluence ? " + VWAP" : ""}</span>` : ""}</div>
@@ -740,6 +760,7 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
     <div><span>الهدف الأول</span><b>${d.t1!=null ? fmt(d.t1) : "—"}</b></div>
     <div><span>الهدف الثاني</span><b>${d.t2!=null ? fmt(d.t2) : "—"}</b></div>
   </div>
+  ${entryCondHtml}
   <div class="verdict-why">${d.why}${d.rrr ? ` — نسبة مخاطرة/عائد تقريبية 1:${d.rrr.toFixed(1)}` : ""}</div>
   <div class="verdict-why">VWAP: ${fmt(a.vwapLast)} (${fmt(a.vwapLowerLast)} – ${fmt(a.vwapUpperLast)}) — النظام: ${a.vwapRegime === "rotation" ? "تجميع/rotation" : "ترند"}</div>
 </div>
