@@ -48,6 +48,10 @@
   .verdict-grid span{display:block;font-size:.75rem;color:var(--muted)}
   .verdict-grid b{font-size:1.05rem}
   .verdict-why{margin-top:12px;font-size:.85rem;color:var(--muted)}
+  .entry-cond{background:#0f1c33;border:1px solid #2a4a7a;border-radius:8px;padding:10px 12px;margin-top:14px;font-size:.88rem;line-height:1.7}
+  .entry-cond b{color:var(--accent)}
+  .copy-btn{background:transparent;border:1px solid var(--accent);color:var(--accent);padding:7px 14px;border-radius:8px;font-size:.82rem;cursor:pointer;margin-top:14px}
+  .copy-btn:hover{background:var(--accent);color:#fff}
   .mini-disclaimer{font-size:.78rem;color:var(--warn);margin-bottom:16px}
   details{margin-top:4px}
   summary{cursor:pointer;color:var(--accent);font-size:.9rem;padding:6px 0}
@@ -178,6 +182,11 @@ const RULES = {
   disclaimer: "⚠️ تحليل تعليمي فقط، مبني على أطر Trader Dale المطبّقة على بيانات حقيقية مجلوبة من Twelve Data — ليس نصيحة استثمارية، وليس توصية تداول، وليس بديلاً عن إدارة المخاطر الخاصة بك. التداول ينطوي على مخاطر خسارة كبيرة، والبيانات المجانية قد تكون متأخرة أو تقريبية (خصوصًا الفوركس/الذهب اللي بيانات حجمه tick-based مو حجم تداول حقيقي)."
 };
 
+const INTERVAL_LABELS = {
+  "5min": "5 دقايق", "15min": "15 دقيقة", "30min": "30 دقيقة",
+  "1h": "ساعة", "4h": "4 ساعات", "1day": "يومي", "1week": "أسبوعي"
+};
+
 /* ---------- Flexible Volume Profile: candle-count lookup per interval for the "session" / "week" scopes ---------- */
 const SCOPE_CANDLES = {
   "5min":  { s1: 288, s2: 1440 },
@@ -217,6 +226,34 @@ el("profileScope").addEventListener("change", syncOutputsize);
 syncOutputsize();
 
 el("go").addEventListener("click", runAnalysis);
+
+/* ---------- Copy Trade: the button is re-created on every render() via innerHTML, so we
+   wire one persistent listener on the (stable) report container instead, and keep the
+   text to copy in this module-level variable that render() refreshes each time. ---------- */
+let lastCopyText = "";
+el("report").addEventListener("click", async (e) => {
+  const btn = e.target.closest("#copyTradeBtn");
+  if (!btn || !lastCopyText) return;
+  const statusEl = document.getElementById("copyStatus");
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(lastCopyText);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = lastCopyText;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    if (statusEl) statusEl.textContent = "✅ انتسخت";
+  } catch (err){
+    if (statusEl) statusEl.textContent = "⚠️ ما انتسخت — انسخها يدوي";
+  }
+  setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2000);
+});
 
 /* ---------- Macro News Filter (optional, needs an FCS API key): high-impact economic events near now ---------- */
 function symbolCurrencies(symbol){
@@ -551,11 +588,14 @@ function decideVP(a){
   const nearBottom = price <= a.vp.valueAreaLow + tol || strongLows.some(l=>Math.abs(price-l)<=tol);
   const nearPOC = Math.abs(price - a.vp.poc) <= tol;
 
-  let signal = "wait", entryLow=null, entryHigh=null, stop=null, t1=null, t2=null, why="";
+  let signal = "wait", entryLow=null, entryHigh=null, stop=null, t1=null, t2=null, why="", triggerLevel=null;
 
   // Stop is always derived from the entry zone itself (never from an independently-scaled
   // level) so it's structurally guaranteed to sit beyond the zone, never inside it.
+  // `level` is also kept as the exact heaviest-volume price the book marks for entry
+  // (triggerLevel) — the zone around it is only for display/order-placement tolerance.
   function setBuyZone(level, t1v, t2v){
+    triggerLevel = level;
     entryHigh = Math.max(level, price) + tol*0.4;
     entryLow  = Math.min(level, price) - tol*0.4;
     stop = entryLow - buffer;
@@ -563,6 +603,7 @@ function decideVP(a){
     t2 = Math.max(t2v, t1 + buffer);
   }
   function setSellZone(level, t1v, t2v){
+    triggerLevel = level;
     entryLow  = Math.min(level, price) - tol*0.4;
     entryHigh = Math.max(level, price) + tol*0.4;
     stop = entryHigh + buffer;
@@ -622,7 +663,16 @@ function decideVP(a){
     if (risk > 0) rrr = reward / risk;
   }
 
-  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr, source: "vp" };
+  // Per Ch13 (Volume Profile Trading Setups): all three core Volume Setups — Accumulation,
+  // Trend, Rejection — are entered on the FIRST TOUCH/retest of the single heaviest-volume
+  // price found within the qualifying structure, with NO extra confirmation candle required
+  // (explicitly contrasted in the book with setups that do need 1-3 confirming candles).
+  // The book's real "confirmation" is the Core Filter itself: a genuine Price Action
+  // signature (sideways accumulation / aggressive initiation / strong rejection) must
+  // actually be visible at that level on the real chart — not a wait-for-candle-close rule.
+  const entryTrigger = signal !== "wait" ? { mode: "firstTouch", level: triggerLevel } : null;
+
+  return { signal, entryLow, entryHigh, stop, t1, t2, why, rrr, entryTrigger, source: "vp" };
 }
 
 /* ---------- VWAP Rotation signal (fade the 1st deviation band back to VWAP) ---------- */
@@ -642,6 +692,10 @@ function decideVWAP(a){
     const entryMid = (entryLow + entryHigh) / 2;
     const rrr = Math.abs(entryMid - stop) > 0 ? Math.abs(t1 - entryMid) / Math.abs(entryMid - stop) : null;
     return { signal:"sell", entryLow, entryHigh, stop, t1, t2:null, rrr, source:"vwap",
+      // VWAP cheatsheet's Entry Confirmation Ladder, rung 3 (the book's own recommended
+      // default): wait for a candle to CLOSE beyond the level, enter on the next candle's
+      // open — unlike the Volume Profile setups, blind first touch is explicitly discouraged.
+      entryTrigger: { mode: "confirmedClose", direction: "below", level: entryLow },
       why: "VWAP Rotation: السعر عند الانحراف الأول العلوي، النظام أفقي (rotation) — يُتوقع رجوع لخط VWAP." };
   }
   if (nearLower && !nearUpper){
@@ -652,6 +706,7 @@ function decideVWAP(a){
     const entryMid = (entryLow + entryHigh) / 2;
     const rrr = Math.abs(entryMid - stop) > 0 ? Math.abs(t1 - entryMid) / Math.abs(entryMid - stop) : null;
     return { signal:"buy", entryLow, entryHigh, stop, t1, t2:null, rrr, source:"vwap",
+      entryTrigger: { mode: "confirmedClose", direction: "above", level: entryHigh },
       why: "VWAP Rotation: السعر عند الانحراف الأول السفلي، النظام أفقي (rotation) — يُتوقع رجوع لخط VWAP." };
   }
   return null;
@@ -729,19 +784,71 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
           source: d.source, newsOverride: true };
   }
 
-  const verdictLabel = d.signal === "buy" ? "🟢 شراء (BUY)" : d.signal === "sell" ? "🔴 بيع (SELL)" : (d.newsOverride ? "⏸ انتظار — أُلغيت بسبب خبر عالي التأثير" : "⏸ انتظار — لا يوجد إعداد واضح الآن");
+  const symbolBadge = escapeHtml(symbol);
+  const intervalLabel = INTERVAL_LABELS[interval] || interval;
+  const verdictLabel = d.signal === "buy" ? `🟢 شراء ${symbolBadge} (BUY)` : d.signal === "sell" ? `🔴 بيع ${symbolBadge} (SELL)` : (d.newsOverride ? "⏸ انتظار — أُلغيت بسبب خبر عالي التأثير" : "⏸ انتظار — لا يوجد إعداد واضح الآن");
   const sourceLabel = d.source === "vwap" ? "VWAP Rotation" : d.source === "vp" ? "Volume Profile" : "";
+
+  // Two genuinely different entry rules from the book, picked by which engine produced the
+  // signal — NOT interchangeable: Volume Profile setups (Ch13) are first-touch/no-confirmation
+  // by design, while VWAP Rotation (VWAP cheatsheet) explicitly recommends waiting for a
+  // confirming candle close instead of a blind first touch.
+  function entryTriggerHtml(){
+    if (!d.entryTrigger) return "";
+    if (d.entryTrigger.mode === "firstTouch"){
+      return `<div class="entry-cond">🕐 <b>شرط دخول الصفقة (Volume Profile — أول لمسة):</b><br>
+ادخل <b>${d.signal === "buy" ? "شراء" : "بيع"}</b> عند <b>أول لمسة</b> للسعر لمستوى <b>${fmt(d.entryTrigger.level)}</b> (أثقل نقطة فوليوم بالإعداد) — حسب الكتاب هالثلاث إعدادات (تجميع/ترند/رفض) تُدخل من أول لمسة، بدون انتظار إغلاق شمعة.<br>
+<span style="color:var(--muted)">بس Core Filter يشترط تشوف بعينك إشارة Price Action حقيقية (رفض واضح أو تجميع جانبي) عند هالمستوى على الشارت الحقيقي — لو ما فيها، تجاهل الإشارة رغم وصول السعر للرقم.</span></div>`;
+    }
+    if (d.entryTrigger.mode === "confirmedClose"){
+      const dirWord = d.entryTrigger.direction === "above" ? "فوق" : "تحت";
+      return `<div class="entry-cond">🕐 <b>شرط دخول الصفقة (VWAP Rotation — إغلاق تأكيدي):</b><br>
+لا تدخل فورًا لمجرد وصول السعر للانحراف. ادخل <b>${d.signal === "buy" ? "شراء" : "بيع"}</b> فقط بعد <b>إغلاق شمعة كاملة ${dirWord} ${fmt(d.entryTrigger.level)}</b> — والدخول يصير عند <b>فتح الشمعة التالية</b> لهذا الإغلاق.<br>
+<span style="color:var(--muted)">لو ما صار هالإغلاق التأكيدي، الإعداد يبقى مجرد احتمال — تجاهله ولا تدخل.</span></div>`;
+    }
+    return "";
+  }
+  const entryCondHtml = entryTriggerHtml();
+
+  function entryTriggerPlainText(){
+    if (!d.entryTrigger) return "";
+    if (d.entryTrigger.mode === "firstTouch"){
+      return `شرط الدخول: أول لمسة للسعر لمستوى ${fmt(d.entryTrigger.level)} (بدون انتظار إغلاق شمعة) — تأكد بعينك من رفض/تجميع Price Action واضح عند هالمستوى قبل الدخول.`;
+    }
+    if (d.entryTrigger.mode === "confirmedClose"){
+      const dirWord = d.entryTrigger.direction === "above" ? "فوق" : "تحت";
+      return `شرط الدخول: بعد إغلاق شمعة كاملة ${dirWord} ${fmt(d.entryTrigger.level)} — ادخل عند فتح الشمعة التالية.`;
+    }
+    return "";
+  }
+  lastCopyText = d.signal === "wait" ? "" : [
+    `${symbol} — ${d.signal === "buy" ? "شراء (BUY)" : "بيع (SELL)"}`,
+    `الفريم: ${intervalLabel}`,
+    `دخول: ${fmt(d.entryLow)} – ${fmt(d.entryHigh)}`,
+    `وقف الخسارة: ${fmt(d.stop)}`,
+    `هدف 1: ${fmt(d.t1)}`,
+    d.t2 != null ? `هدف 2: ${fmt(d.t2)}` : null,
+    entryTriggerPlainText(),
+    "⚠️ تعليمي فقط (Trader Dale Live Analysis) — مو نصيحة استثمارية، القرار والمخاطرة عليك."
+  ].filter(Boolean).join("\n");
+
+  const copyBtnHtml = d.signal !== "wait"
+    ? `<button id="copyTradeBtn" type="button" class="copy-btn">📋 نسخ الصفقة</button>`
+    : "";
+
   const verdictHtml = `
 <div class="verdict ${d.signal}">
-  <div class="verdict-badge">${verdictLabel}${sourceLabel ? ` <span class="pill">${sourceLabel}${d.confluence ? " + VWAP" : ""}</span>` : ""}</div>
+  <div class="verdict-badge">${verdictLabel} <span class="pill">فريم ${escapeHtml(intervalLabel)}</span>${sourceLabel ? ` <span class="pill">${sourceLabel}${d.confluence ? " + VWAP" : ""}</span>` : ""}</div>
   <div class="verdict-grid">
     <div><span>منطقة الدخول</span><b>${d.entryLow!=null ? fmt(d.entryLow)+" – "+fmt(d.entryHigh) : "—"}</b></div>
     <div><span>وقف الخسارة (خروج)</span><b>${d.stop!=null ? fmt(d.stop) : "—"}</b></div>
     <div><span>الهدف الأول</span><b>${d.t1!=null ? fmt(d.t1) : "—"}</b></div>
     <div><span>الهدف الثاني</span><b>${d.t2!=null ? fmt(d.t2) : "—"}</b></div>
   </div>
+  ${entryCondHtml}
   <div class="verdict-why">${d.why}${d.rrr ? ` — نسبة مخاطرة/عائد تقريبية 1:${d.rrr.toFixed(1)}` : ""}</div>
   <div class="verdict-why">VWAP: ${fmt(a.vwapLast)} (${fmt(a.vwapLowerLast)} – ${fmt(a.vwapUpperLast)}) — النظام: ${a.vwapRegime === "rotation" ? "تجميع/rotation" : "ترند"}</div>
+  ${copyBtnHtml}<span id="copyStatus" class="note" style="display:inline-block;margin-inline-start:8px"></span>
 </div>
 <div class="mini-disclaimer">⚠️ تعليمي فقط، حساب آلي تقريبي مبني على بيانات Twelve Data — مو نصيحة استثمارية، والقرار والمخاطرة عليك.</div>`;
 
