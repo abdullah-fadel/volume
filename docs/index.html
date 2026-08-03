@@ -182,6 +182,11 @@ const RULES = {
   disclaimer: "⚠️ تحليل تعليمي فقط، مبني على أطر Trader Dale المطبّقة على بيانات حقيقية مجلوبة من Twelve Data — ليس نصيحة استثمارية، وليس توصية تداول، وليس بديلاً عن إدارة المخاطر الخاصة بك. التداول ينطوي على مخاطر خسارة كبيرة، والبيانات المجانية قد تكون متأخرة أو تقريبية (خصوصًا الفوركس/الذهب اللي بيانات حجمه tick-based مو حجم تداول حقيقي)."
 };
 
+const INTERVAL_LABELS = {
+  "5min": "5 دقايق", "15min": "15 دقيقة", "30min": "30 دقيقة",
+  "1h": "ساعة", "4h": "4 ساعات", "1day": "يومي", "1week": "أسبوعي"
+};
+
 /* ---------- Flexible Volume Profile: candle-count lookup per interval for the "session" / "week" scopes ---------- */
 const SCOPE_CANDLES = {
   "5min":  { s1: 288, s2: 1440 },
@@ -780,6 +785,7 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
   }
 
   const symbolBadge = escapeHtml(symbol);
+  const intervalLabel = INTERVAL_LABELS[interval] || interval;
   const verdictLabel = d.signal === "buy" ? `🟢 شراء ${symbolBadge} (BUY)` : d.signal === "sell" ? `🔴 بيع ${symbolBadge} (SELL)` : (d.newsOverride ? "⏸ انتظار — أُلغيت بسبب خبر عالي التأثير" : "⏸ انتظار — لا يوجد إعداد واضح الآن");
   const sourceLabel = d.source === "vwap" ? "VWAP Rotation" : d.source === "vp" ? "Volume Profile" : "";
 
@@ -817,6 +823,7 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
   }
   lastCopyText = d.signal === "wait" ? "" : [
     `${symbol} — ${d.signal === "buy" ? "شراء (BUY)" : "بيع (SELL)"}`,
+    `الفريم: ${intervalLabel}`,
     `دخول: ${fmt(d.entryLow)} – ${fmt(d.entryHigh)}`,
     `وقف الخسارة: ${fmt(d.stop)}`,
     `هدف 1: ${fmt(d.t1)}`,
@@ -831,7 +838,7 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
 
   const verdictHtml = `
 <div class="verdict ${d.signal}">
-  <div class="verdict-badge">${verdictLabel}${sourceLabel ? ` <span class="pill">${sourceLabel}${d.confluence ? " + VWAP" : ""}</span>` : ""}</div>
+  <div class="verdict-badge">${verdictLabel} <span class="pill">فريم ${escapeHtml(intervalLabel)}</span>${sourceLabel ? ` <span class="pill">${sourceLabel}${d.confluence ? " + VWAP" : ""}</span>` : ""}</div>
   <div class="verdict-grid">
     <div><span>منطقة الدخول</span><b>${d.entryLow!=null ? fmt(d.entryLow)+" – "+fmt(d.entryHigh) : "—"}</b></div>
     <div><span>وقف الخسارة (خروج)</span><b>${d.stop!=null ? fmt(d.stop) : "—"}</b></div>
