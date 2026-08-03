@@ -811,26 +811,29 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
   const entryCondHtml = entryTriggerHtml();
 
   function entryTriggerPlainText(){
-    if (!d.entryTrigger) return "";
+    if (!d.entryTrigger) return null;
     if (d.entryTrigger.mode === "firstTouch"){
-      return `شرط الدخول: أول لمسة للسعر لمستوى ${fmt(d.entryTrigger.level)} (بدون انتظار إغلاق شمعة) — تأكد بعينك من رفض/تجميع Price Action واضح عند هالمستوى قبل الدخول.`;
+      return `⏱ الدخول: أول لمسة لسعر ${fmt(d.entryTrigger.level)} (بدون انتظار إغلاق) — تأكد من رفض/تجميع واضح بالشارت.`;
     }
     if (d.entryTrigger.mode === "confirmedClose"){
       const dirWord = d.entryTrigger.direction === "above" ? "فوق" : "تحت";
-      return `شرط الدخول: بعد إغلاق شمعة كاملة ${dirWord} ${fmt(d.entryTrigger.level)} — ادخل عند فتح الشمعة التالية.`;
+      return `⏱ الدخول: بعد إغلاق شمعة ${dirWord} ${fmt(d.entryTrigger.level)} — ادخل بفتح الشمعة التالية.`;
     }
-    return "";
+    return null;
   }
+  // Blank strings ("") are kept as intentional line-break spacers when pasted elsewhere
+  // (WhatsApp/Telegram/notes); only null/undefined lines (missing t2, no trigger) drop out.
   lastCopyText = d.signal === "wait" ? "" : [
-    `${symbol} — ${d.signal === "buy" ? "شراء (BUY)" : "بيع (SELL)"}`,
-    `الفريم: ${intervalLabel}`,
-    `دخول: ${fmt(d.entryLow)} – ${fmt(d.entryHigh)}`,
-    `وقف الخسارة: ${fmt(d.stop)}`,
-    `هدف 1: ${fmt(d.t1)}`,
-    d.t2 != null ? `هدف 2: ${fmt(d.t2)}` : null,
-    entryTriggerPlainText(),
-    "⚠️ تعليمي فقط (Trader Dale Live Analysis) — مو نصيحة استثمارية، القرار والمخاطرة عليك."
-  ].filter(Boolean).join("\n");
+    `📊 ${symbol}  |  فريم ${intervalLabel}`,
+    d.signal === "buy" ? "🟢 شراء (BUY)" : "🔴 بيع (SELL)",
+    "",
+    `الدخول: ${fmt(d.entryLow)} – ${fmt(d.entryHigh)}`,
+    `الوقف: ${fmt(d.stop)}`,
+    `الهدف 1: ${fmt(d.t1)}`,
+    d.t2 != null ? `الهدف 2: ${fmt(d.t2)}` : null,
+    "",
+    entryTriggerPlainText()
+  ].filter(line => line !== null && line !== undefined).join("\n");
 
   const copyBtnHtml = d.signal !== "wait"
     ? `<button id="copyTradeBtn" type="button" class="copy-btn">📋 نسخ الصفقة</button>`
