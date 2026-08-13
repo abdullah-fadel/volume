@@ -70,15 +70,47 @@
       <div>
         <label>الأداة (Symbol)</label>
         <select id="symbolPreset">
-          <option value="XAU/USD">الذهب — XAU/USD</option>
-          <option value="EUR/USD">EUR/USD</option>
-          <option value="EUR/CAD">EUR/CAD</option>
-          <option value="GBP/USD">GBP/USD</option>
-          <option value="USD/JPY">USD/JPY</option>
-          <option value="BTC/USD">BTC/USD</option>
+          <optgroup label="⭐ معادن">
+            <option value="XAU/USD">الذهب — XAU/USD</option>
+            <option value="XAG/USD">الفضة — XAG/USD</option>
+            <option value="XPT/USD">البلاتين — XPT/USD</option>
+          </optgroup>
+          <optgroup label="💱 فوركس — أزواج رئيسية">
+            <option value="EUR/USD">EUR/USD</option>
+            <option value="GBP/USD">GBP/USD</option>
+            <option value="USD/JPY">USD/JPY</option>
+            <option value="USD/CHF">USD/CHF</option>
+            <option value="USD/CAD">USD/CAD</option>
+            <option value="AUD/USD">AUD/USD</option>
+            <option value="NZD/USD">NZD/USD</option>
+          </optgroup>
+          <optgroup label="💱 فوركس — أزواج ثانوية">
+            <option value="EUR/CAD">EUR/CAD</option>
+            <option value="EUR/GBP">EUR/GBP</option>
+            <option value="EUR/JPY">EUR/JPY</option>
+            <option value="GBP/JPY">GBP/JPY</option>
+            <option value="AUD/JPY">AUD/JPY</option>
+          </optgroup>
+          <optgroup label="₿ كريبتو">
+            <option value="BTC/USD">BTC/USD</option>
+            <option value="ETH/USD">ETH/USD</option>
+          </optgroup>
+          <optgroup label="📈 أسهم أمريكية">
+            <option value="AAPL">Apple — AAPL</option>
+            <option value="MSFT">Microsoft — MSFT</option>
+            <option value="GOOGL">Google — GOOGL</option>
+            <option value="AMZN">Amazon — AMZN</option>
+            <option value="TSLA">Tesla — TSLA</option>
+            <option value="NVDA">Nvidia — NVDA</option>
+            <option value="META">Meta — META</option>
+          </optgroup>
           <option value="__custom__">أداة أخرى (اكتبها تحت)</option>
         </select>
         <input id="symbolCustom" placeholder="مثال: GOOGL أو AAPL أو XAU/USD" style="margin-top:8px;display:none">
+        <div class="note" id="symbolFormatNote" style="display:none">
+          📌 الصيغة الصحيحة حسب النوع: <b>فوركس/معادن/كريبتو</b> بصيغة <code>BASE/QUOTE</code> زي <code>EUR/USD</code> أو <code>XAU/USD</code> (لازم "/" بينهم) —
+          <b>الأسهم</b> بس الرمز نفسه بدون "/" زي <code>AAPL</code> أو <code>TSLA</code>. أي صيغة ثانية (بدون "/" للفوركس، أو اسم عربي، أو رمز غلط) تطلع خطأ من Twelve Data.
+        </div>
       </div>
       <div>
         <label>الفريم (Interval)</label>
@@ -201,7 +233,9 @@ const SCOPE_CANDLES = {
 /* ---------- DOM wiring ---------- */
 const el = (id) => document.getElementById(id);
 el("symbolPreset").addEventListener("change", () => {
-  el("symbolCustom").style.display = el("symbolPreset").value === "__custom__" ? "block" : "none";
+  const isCustom = el("symbolPreset").value === "__custom__";
+  el("symbolCustom").style.display = isCustom ? "block" : "none";
+  el("symbolFormatNote").style.display = isCustom ? "block" : "none";
 });
 const savedKey = localStorage.getItem("td_api_key");
 if (savedKey) { el("apiKey").value = savedKey; el("rememberKey").checked = true; }
@@ -377,6 +411,19 @@ async function runAnalysis(){
   if (!symbol){ showErr("لازم تكتب اسم الأداة."); return; }
   if (!apiKey){ showErr("لازم تحط مفتاح Twelve Data API."); return; }
 
+  // Catch the two most common custom-symbol mistakes before even calling the API, with a
+  // specific fix instead of Twelve Data's generic "symbol not found" error.
+  if (/[؀-ۿ]/.test(symbol)){
+    showErr(`اكتب رمز الأداة بالإنجليزي، مو بالعربي. مثال: EUR/USD أو XAU/USD أو AAPL.`);
+    return;
+  }
+  const bare = symbol.replace(/\s/g, "");
+  if (/^[A-Za-z]{6}$/.test(bare)){
+    const guess = `${bare.slice(0,3).toUpperCase()}/${bare.slice(3).toUpperCase()}`;
+    showErr(`ناقصة "/" بين العملتين — للفوركس/المعادن/الكريبتو لازم صيغة BASE/QUOTE. جرّب: ${guess}`);
+    return;
+  }
+
   if (el("rememberKey").checked) localStorage.setItem("td_api_key", apiKey);
   else localStorage.removeItem("td_api_key");
   if (el("rememberNewsKey").checked) localStorage.setItem("td_news_key", newsApiKey);
@@ -423,7 +470,7 @@ async function runAnalysis(){
     render(symbol, interval, data.meta, analysis, candles, newsInfo, historicalReaction);
     statusEl.textContent = `✅ تم — ${candles.length} شمعة من ${candles[0].t} إلى ${candles[candles.length-1].t}`;
   } catch (e) {
-    showErr("❌ " + e.message + "\n\nملاحظة: لو الخطأ CORS أو Failed to fetch، جرّب تتأكد إن المفتاح صحيح ونشط، أو إن حد الطلبات اليومي (800/يوم) ما انتهى.");
+    showErr("❌ " + e.message + "\n\nملاحظة: تأكد الصيغة صحيحة — فوركس/معادن/كريبتو لازم \"/\" بينهم (مثل EUR/USD)، الأسهم بدون \"/\" (مثل AAPL). ولو الخطأ CORS أو Failed to fetch، جرّب تتأكد إن المفتاح صحيح ونشط، أو إن حد الطلبات اليومي (800/يوم) ما انتهى.");
   } finally {
     btn.disabled = false;
   }
