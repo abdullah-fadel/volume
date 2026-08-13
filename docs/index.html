@@ -728,6 +728,21 @@ function decide(a){
   return vp;
 }
 
+/* ---------- Points (pips) calculator: how many points the plan risks vs. targets ---------- */
+function pipSize(symbol){
+  const upper = symbol.toUpperCase();
+  if (!upper.includes("/")) return null; // stock ticker etc. — no forex pip convention applies
+  const [base, quote] = upper.split("/");
+  const nonForex = ["XAU","XAG","XPT","XPD","BTC","ETH","LTC","XRP","DOGE"]; // metals/crypto: no standard pip size
+  if (nonForex.includes(base) || nonForex.includes(quote)) return null;
+  return upper.includes("JPY") ? 0.01 : 0.0001;
+}
+function formatPoints(diff, symbol){
+  const ps = pipSize(symbol);
+  if (ps) return `${(diff / ps).toFixed(1)} نقطة`;
+  return `${diff.toFixed(diff < 10 ? 4 : 2)} (فرق سعر مباشر — هذي الأداة ما تُقاس بنظام Pips القياسي)`;
+}
+
 /* ---------- Report rendering ---------- */
 function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction){
   const fmt = (n) => n.toFixed(n < 10 ? 5 : n < 1000 ? 3 : 2);
@@ -821,6 +836,20 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
     }
     return null;
   }
+  // Points/pips: measured from the entry zone's midpoint (same reference decideVP/decideVWAP
+  // used internally for the RRR calc), so it lines up with the displayed levels exactly.
+  let pointsHtml = "", lossPtsText = null, winPtsText1 = null, winPtsText2 = null;
+  if (d.signal !== "wait" && d.entryLow != null){
+    const entryMid = (d.entryLow + d.entryHigh) / 2;
+    lossPtsText = formatPoints(Math.abs(entryMid - d.stop), symbol);
+    winPtsText1 = formatPoints(Math.abs(d.t1 - entryMid), symbol);
+    winPtsText2 = d.t2 != null ? formatPoints(Math.abs(d.t2 - entryMid), symbol) : null;
+    pointsHtml = `<div class="entry-cond">📐 <b>النقاط المحتملة (من نص منطقة الدخول):</b><br>
+🟢 النقاط المحتمل ربحها (هدف 1): <b>${winPtsText1}</b>${winPtsText2 ? `<br>🟢 النقاط المحتمل ربحها (هدف 2): <b>${winPtsText2}</b>` : ""}<br>
+🔴 النقاط المحتمل خسارتها (لو ضرب الوقف): <b>${lossPtsText}</b><br>
+<span style="color:var(--muted)">هذا حساب المسافة السعرية نفسها بوحدة نقاط/pips — مو ضمان إن الهدف أو الوقف بيتحقق فعليًا.</span></div>`;
+  }
+
   // Blank strings ("") are kept as intentional line-break spacers when pasted elsewhere
   // (WhatsApp/Telegram/notes); only null/undefined lines (missing t2, no trigger) drop out.
   lastCopyText = d.signal === "wait" ? "" : [
@@ -832,7 +861,11 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
     `الهدف 1: ${fmt(d.t1)}`,
     d.t2 != null ? `الهدف 2: ${fmt(d.t2)}` : null,
     "",
-    entryTriggerPlainText()
+    entryTriggerPlainText(),
+    "",
+    winPtsText1 ? `🟢 نقاط ربح محتملة (هدف 1): ${winPtsText1}` : null,
+    winPtsText2 ? `🟢 نقاط ربح محتملة (هدف 2): ${winPtsText2}` : null,
+    lossPtsText ? `🔴 نقاط خسارة محتملة (الوقف): ${lossPtsText}` : null
   ].filter(line => line !== null && line !== undefined).join("\n");
 
   const copyBtnHtml = d.signal !== "wait"
@@ -849,6 +882,7 @@ function render(symbol, interval, meta, a, candles, newsInfo, historicalReaction
     <div><span>الهدف الثاني</span><b>${d.t2!=null ? fmt(d.t2) : "—"}</b></div>
   </div>
   ${entryCondHtml}
+  ${pointsHtml}
   <div class="verdict-why">${d.why}${d.rrr ? ` — نسبة مخاطرة/عائد تقريبية 1:${d.rrr.toFixed(1)}` : ""}</div>
   <div class="verdict-why">VWAP: ${fmt(a.vwapLast)} (${fmt(a.vwapLowerLast)} – ${fmt(a.vwapUpperLast)}) — النظام: ${a.vwapRegime === "rotation" ? "تجميع/rotation" : "ترند"}</div>
   ${copyBtnHtml}<span id="copyStatus" class="note" style="display:inline-block;margin-inline-start:8px"></span>
