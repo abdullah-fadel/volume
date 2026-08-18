@@ -11,7 +11,7 @@
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Tahoma,Arial,sans-serif;line-height:1.6}
-  .wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+  .wrap{max-width:980px;margin:0 auto;padding:20px 16px 190px}
   h1{font-size:1.4rem;margin:0 0 4px}
   .sub{color:var(--muted);font-size:.9rem;margin-bottom:20px}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:16px}
@@ -30,6 +30,13 @@
   .warn{background:#2a2110;border:1px solid #4a3a12;color:var(--warn);border-radius:8px;padding:10px 12px;font-size:.82rem;margin-top:10px}
   #status{font-size:.85rem;color:var(--muted);margin-top:10px;min-height:1.2em}
   #err{background:#2a1414;border:1px solid #5a2323;color:#ff9a9a;border-radius:8px;padding:12px;display:none;white-space:pre-wrap;font-size:.85rem}
+  /* Analyze button pinned to the bottom of the viewport, so it's always one tap away
+     without scrolling back down through the settings card — same #go/#status/#err
+     elements, just relocated, so runAnalysis()'s el(...) lookups are unaffected. */
+  .analyze-bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--border);z-index:50;box-shadow:0 -6px 16px #00000066}
+  .analyze-bar-inner{max-width:980px;margin:0 auto;padding:10px 16px calc(10px + env(safe-area-inset-bottom))}
+  .analyze-bar button{width:100%;margin-top:0}
+  .analyze-bar #err{max-height:130px;overflow-y:auto}
   canvas{width:100%;height:auto;background:#0f1320;border-radius:8px;border:1px solid var(--border)}
   .report{white-space:pre-wrap;font-size:.92rem}
   .report h2{font-size:1.05rem;border-bottom:1px solid var(--border);padding-bottom:6px;margin-top:22px}
@@ -211,10 +218,6 @@
         ⚠️ هذا الجزء تجريبي (endpoint وCORS ما قدرت أتحقق منهم مباشرة أثناء البناء) — لو طلع خطأ وضحه للمطوّر عشان يتصلّح بسرعة، وباقي التحليل يشتغل عادي حتى لو فشل هذا الجزء.
       </div>
     </div>
-
-    <button id="go">تحليل</button>
-    <div id="status"></div>
-    <div id="err"></div>
   </div>
 
   <div class="card" id="chartCard" style="display:none">
@@ -227,6 +230,14 @@
     مبني على السكلات <code>trader-dale-price-action</code> و<code>trader-dale-order-flow</code> و<code>trader-dale-vwap</code> و<code>trader-dale-investing</code> —
     كل حساب Volume Profile / Price Action / VWAP يصير بالكامل بمتصفحك، ما فيه أي جزء يشتغل على سيرفر.
   </footer>
+</div>
+
+<div class="analyze-bar">
+  <div class="analyze-bar-inner">
+    <button id="go">تحليل</button>
+    <div id="status"></div>
+    <div id="err"></div>
+  </div>
 </div>
 
 <script>
